@@ -1,0 +1,92 @@
+---
+import type { BackendHealth, PublicUser } from '../types/greenhouse';
+
+export interface Props {
+  user?: PublicUser | null;
+  health?: BackendHealth | null;
+}
+
+const { user = null, health = null } = Astro.props;
+
+const mode = health?.mode ?? 'local_simulation';
+const isSystemOnline = mode === 'backend_mqtt' || mode === 'backend_no_mqtt';
+
+const healthDotClass = isSystemOnline ? 'status-dot-online' : 'status-dot-offline';
+
+const healthLabel = isSystemOnline ? '系统在线' : '连接异常';
+
+const healthTooltip = isSystemOnline
+  ? '温室监控服务运行正常'
+  : '服务连接异常，请稍后重试';
+---
+
+<header class="navbar">
+  <div class="wrap navbar-inner">
+    <a class="skip-link" href="#top">跳至正文</a>
+
+    <a href="/" class="brand-link" aria-label="返回智农温室云控工作台首页">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="miter">
+          <path d="M4 20C4 11 10 4 20 4c0 10-7 16-16 16Z" />
+          <path d="M4 20L14 10" />
+        </svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-title">智农温室云控</span>
+        <span class="brand-sub">智能温室管理</span>
+      </span>
+    </a>
+
+    <div class="navbar-right">
+      <span class="nav-pill" title={healthTooltip} data-testid="backend-health-pill">
+        <span class={`status-dot ${healthDotClass}`} aria-hidden="true"></span>
+        <span>{healthLabel}</span>
+      </span>
+
+      {user ? (
+        <>
+          <div class="nav-user">
+            <span class="nav-user-name">{user.displayName}</span>
+            <span class="nav-user-role">· {user.role}</span>
+          </div>
+
+          <button
+            type="button"
+            id="navbar-logout-btn"
+            class="btn btn-secondary btn-sm"
+            data-testid="logout-btn"
+          >
+            退出登录
+          </button>
+        </>
+      ) : (
+        <a href="/login" class="btn btn-primary btn-sm">登录工作台</a>
+      )}
+    </div>
+  </div>
+</header>
+
+{user && (
+  <script is:inline>
+    (() => {
+      const logoutBtn = document.getElementById('navbar-logout-btn');
+      if (!logoutBtn) return;
+      logoutBtn.addEventListener('click', async () => {
+        logoutBtn.setAttribute('disabled', 'true');
+        const originalText = logoutBtn.textContent;
+        logoutBtn.textContent = '退出中...';
+        try {
+          await fetch('/api/auth/logout', { method: 'POST' });
+        } catch {
+          // Even if network fails briefly, proceed to login screen
+        } finally {
+          window.location.assign('/login');
+          setTimeout(() => {
+            logoutBtn.removeAttribute('disabled');
+            logoutBtn.textContent = originalText || '退出登录';
+          }, 1500);
+        }
+      });
+    })();
+  </script>
+)}

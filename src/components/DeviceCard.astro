@@ -1,0 +1,143 @@
+---
+import type { UserDeviceSnapshot } from '../types/greenhouse';
+
+export interface Props {
+  snapshot: UserDeviceSnapshot;
+}
+
+const { snapshot } = Astro.props;
+const {
+  binding,
+  device_id,
+  online,
+  latest_telemetry: tel,
+  active_alarm_count,
+  active_alarms,
+  last_seen_at,
+} = snapshot;
+
+const isSimulated = Boolean(snapshot.simulated);
+
+const ALARM_LABELS: Record<string, string> = {
+  water_lack: '水箱缺水',
+  turntable_failed: '转盘故障',
+};
+
+const alarmSummary = active_alarms
+  .map((a) => ALARM_LABELS[a.code] || a.code)
+  .join('、');
+
+const sourceLabel = isSimulated ? '本地模拟' : tel ? '实时数据' : '-';
+
+function formatLastSeen(iso: string | null): string {
+  if (!iso) return '-';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(ms));
+}
+
+const deviceHref = `/devices/${encodeURIComponent(device_id)}`;
+const actuatorLine = tel
+  ? `风扇:${tel.fan_on ? '运行' : '待机'} · 补光:${tel.light_on ? '开' : '关'} · 加热:${tel.heat_on ? '运行' : '待机'}`
+  : '-';
+---
+
+<article class="device-card" data-device-card={device_id}>
+  <div class="device-card-head">
+    <div style="min-width: 0;">
+      <div class="device-id-row">
+        <span class="device-id-code">{device_id}</span>
+        {binding.location && <span class="badge badge-neutral">{binding.location}</span>}
+        {binding.cropType && <span class="badge badge-info">{binding.cropType}</span>}
+      </div>
+      <h3 class="device-name">{binding.name}</h3>
+    </div>
+
+    <span class={`device-state-text ${online ? 'is-online' : 'is-offline'}`}>
+      <span class={`status-dot ${online ? 'status-dot-online' : 'status-dot-offline'}`} aria-hidden="true"></span>
+      <span>{online ? '在线' : '离线'}</span>
+    </span>
+  </div>
+
+  {active_alarm_count > 0 && (
+    <div class="device-alarm-bar" role="status">
+      <span style="display: inline-flex; align-items: center; gap: 6px;">
+        <span class="status-dot status-dot-danger" aria-hidden="true"></span>
+        <span>活动告警 ({active_alarm_count})：{alarmSummary}</span>
+      </span>
+      <span>告警</span>
+    </div>
+  )}
+
+  <div class="device-card-body">
+    <ul class="rows" aria-label="核心环境遥测数据">
+      <li>
+        <span class="rows__name">空气温度</span>
+        <span class="rows__value">{tel ? `${tel.temperature.toFixed(2)} ℃` : '-'}</span>
+      </li>
+      <li>
+        <span class="rows__name">空气湿度</span>
+        <span class="rows__value">{tel ? `${tel.air_humidity.toFixed(2)} %RH` : '-'}</span>
+      </li>
+      <li>
+        <span class="rows__name">土壤湿度</span>
+        <span class="rows__value">{tel ? `${tel.soil_humidity.toFixed(2)} %RH` : '-'}</span>
+      </li>
+      <li>
+        <span class="rows__name">光照强度</span>
+        <span class="rows__value">{tel ? `${tel.lux} lx` : '-'}</span>
+      </li>
+      <li>
+        <span class="rows__name">水箱水位</span>
+        <span
+          class="rows__value"
+          style={tel && !tel.water_sufficient ? 'color: var(--danger);' : tel ? 'color: var(--accent);' : ''}
+        >
+          {tel ? (tel.water_sufficient ? '充足' : '缺水告警') : '-'}
+        </span>
+      </li>
+      <li>
+        <span class="rows__name">执行器回路</span>
+        <span class="rows__value" style="font-size: 13px;">{actuatorLine}</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="device-meta-foot">
+    <span>更新：{formatLastSeen(last_seen_at)}</span>
+    <span>{sourceLabel}</span>
+  </div>
+
+  <div class="device-actions">
+    <div class="device-actions-left">
+      {isSimulated && (
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm js-simulate-btn"
+          data-simulate-device={device_id}
+        >
+          模拟上报
+        </button>
+      )}
+      <button
+        type="button"
+        class="btn btn-outline-danger btn-sm js-unbind-btn"
+        data-unbind-device={device_id}
+        data-unbind-name={binding.name}
+      >
+        解绑
+      </button>
+    </div>
+
+    <a href={deviceHref} class="btn btn-primary btn-sm">
+      进入控制台 →
+    </a>
+  </div>
+</article>

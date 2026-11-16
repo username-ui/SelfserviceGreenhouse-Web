@@ -1,0 +1,1220 @@
+---
+import type { MetricStats, TelemetryData, TelemetryHistoryResponse } from '../types/greenhouse';
+
+interface Props {
+  deviceId: string;
+  history: TelemetryHistoryResponse;
+}
+
+const { deviceId, history } = Astro.props;
+
+type MetricKey = 'temperature' | 'air_humidity' | 'soil_humidity' | 'lux';
+
+interface MetricMeta {
+  key: MetricKey;
+  label: string;
+  shortLabel: string;
+  unit: string;
+  color: string;
+  gradStart: string;
+  gradEnd: string;
+  decimals: number;
+}
+
+const metrics: MetricMeta[] = [
+  {
+    key: 'temperature',
+    label: '温度',
+    shortLabel: '温度 ℃',
+    unit: '℃',
+    color: '#e11d48',
+    gradStart: 'rgba(225, 29, 72, 0.24)',
+    gradEnd: 'rgba(225, 29, 72, 0.01)',
+    decimals: 2,
+  },
+  {
+    key: 'air_humidity',
+    label: '空气湿度',
+    shortLabel: '空气湿度 %RH',
+    unit: '%RH',
+    color: '#0284c7',
+    gradStart: 'rgba(2, 132, 199, 0.24)',
+    gradEnd: 'rgba(2, 132, 199, 0.01)',
+    decimals: 2,
+  },
+  {
+    key: 'soil_humidity',
+    label: '土壤湿度',
+    shortLabel: '土壤湿度 %RH',
+    unit: '%RH',
+    color: '#059669',
+    gradStart: 'rgba(5, 150, 105, 0.25)',
+    gradEnd: 'rgba(5, 150, 105, 0.01)',
+    decimals: 2,
+  },
+  {
+    key: 'lux',
+    label: '光照强度',
+    shortLabel: '光照 lx',
+    unit: 'lx',
+    color: '#d97706',
+    gradStart: 'rgba(217, 119, 6, 0.25)',
+    gradEnd: 'rgba(217, 119, 6, 0.01)',
+    decimals: 0,
+  },
+];
+
+// history.items is fetched in desc order (newest first); sort ascending for chart X-axis
+const itemsDesc = [...(history.items ?? [])].sort((a, b) => {
+  if (a.received_at_ms !== b.received_at_ms) return b.received_at_ms - a.received_at_ms;
+  return b.seq - a.seq;
+});
+const itemsAsc = [...itemsDesc].reverse();
+const recentTen = itemsDesc.slice(0, 10);
+
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatShortTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function formatStatVal(val: number | null, decimals: number, unit: string): string {
+  if (val === null || !Number.isFinite(val)) return '-';
+  const num = decimals === 0 ? String(Math.round(val)) : val.toFixed(decimals);
+  return `${num} ${unit}`;
+}
+
+// Compute initial SSR SVG geometry for the default tab ('temperature') so first paint has no flash
+const VB_W = 820;
+const VB_H = 260;
+const PAD = { top: 20, right: 20, bottom: 34, left: 56 };
+const PLOT_W = VB_W - PAD.left - PAD.right;
+const PLOT_H = VB_H - PAD.top - PAD.bottom;
+
+interface SvgPoint {
+  x: number;
+  y: number;
+  val: number;
+  seq: number;
+  ms: number;
+}
+
+function buildSvgGeometry(points: TelemetryData[], key: MetricKey, decimals: number) {
+  if (points.length === 0) {
+    return {
+      coords: [] as SvgPoint[],
+      linePath: '',
+      areaPath: '',
+      ticks: [] as Array<{ y: number; label: string }>,
+      xLabels: [] as Array<{ x: number; label: string }>,
+    };
+  }
+
+  const values = points.map((p) => Number(p[key]));
+  let minVal = Math.min(...values);
+  let maxVal = Math.max(...values);
+  if (minVal === maxVal) {
+    const pad = key === 'lux' ? Math.max(50, Math.abs(minVal) * 0.1) : 2;
+    minVal -= pad;
+    maxVal += pad;
+  } else {
+    const span = maxVal - minVal;
+    minVal -= span * 0.12;
+    maxVal += span * 0.12;
+  }
+  if (key !== 'temperature' && minVal < 0) {
+    minVal = 0;
+  }
+
+  const range = maxVal - minVal || 1;
+  const coords: SvgPoint[] = points.map((p, idx) => {
+    const x =
+      points.length === 1
+        ? PAD.left + PLOT_W / 2
+        : PAD.left + (idx / (points.length - 1)) * PLOT_W;
+    const rawY = PAD.top + PLOT_H - ((Number(p[key]) - minVal) / range) * PLOT_H;
+    const y = Math.max(PAD.top, Math.min(PAD.top + PLOT_H, rawY));
+    return { x, y, val: Number(p[key]), seq: p.seq, ms: p.received_at_ms };
+  });
+
+  let linePath = '';
+  if (coords.length === 1) {
+    const pt = coords[0];
+    linePath = `M ${PAD.left.toFixed(1)} ${pt.y.toFixed(1)} L ${(PAD.left + PLOT_W).toFixed(1)} ${pt.y.toFixed(1)}`;
+  } else {
+    const clampY = (val: number) => Math.max(PAD.top, Math.min(PAD.top + PLOT_H, val));
+    linePath = `M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`;
+    for (let i = 0; i < coords.length - 1; i++) {
+      const p0 = coords[i - 1] ?? coords[i];
+      const p1 = coords[i];
+      const p2 = coords[i + 1];
+      const p3 = coords[i + 2] ?? p2;
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = clampY(p1.y + (p2.y - p0.y) / 6);
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = clampY(p2.y - (p3.y - p1.y) / 6);
+      linePath += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+    }
+  }
+
+  const baseBottom = (PAD.top + PLOT_H).toFixed(2);
+  const areaPath =
+    coords.length === 1
+      ? `M ${PAD.left.toFixed(2)} ${coords[0].y.toFixed(2)} L ${(PAD.left + PLOT_W).toFixed(2)} ${coords[0].y.toFixed(2)} L ${(PAD.left + PLOT_W).toFixed(2)} ${baseBottom} L ${PAD.left.toFixed(2)} ${baseBottom} Z`
+      : `${linePath} L ${coords[coords.length - 1].x.toFixed(2)} ${baseBottom} L ${coords[0].x.toFixed(2)} ${baseBottom} Z`;
+
+  const ticks = Array.from({ length: 5 }, (_, idx) => {
+    const ratio = idx / 4;
+    const val = maxVal - ratio * range;
+    const y = PAD.top + ratio * PLOT_H;
+    const label = decimals === 0 ? String(Math.round(val)) : val.toFixed(1);
+    return { y, label };
+  });
+
+  const labelIndices =
+    coords.length <= 1
+      ? [0]
+      : coords.length <= 4
+      ? coords.map((_, idx) => idx)
+      : [0, Math.floor((coords.length - 1) / 3), Math.floor(((coords.length - 1) * 2) / 3), coords.length - 1];
+
+  const xLabels = Array.from(new Set(labelIndices)).map((idx) => ({
+    x: coords[idx].x,
+    label: formatShortTime(coords[idx].ms),
+  }));
+
+  return { coords, linePath, areaPath, ticks, xLabels };
+}
+
+const initialMetric = metrics[0];
+const initialGeom = buildSvgGeometry(itemsAsc, initialMetric.key, initialMetric.decimals);
+const initialStats: MetricStats = history.stats?.temperature ?? { min: null, max: null, avg: null };
+const sampleCount = history.stats?.count ?? history.total ?? itemsAsc.length;
+
+const chartPayload = {
+  deviceId,
+  points: itemsAsc.map((item) => ({
+    seq: item.seq,
+    up: item.up,
+    temperature: item.temperature,
+    air_humidity: item.air_humidity,
+    soil_humidity: item.soil_humidity,
+    lux: item.lux,
+    water: item.water,
+    fan: item.fan,
+    light: item.light,
+    heat: item.heat,
+    received_at: item.received_at,
+    received_at_ms: item.received_at_ms,
+  })),
+  stats: history.stats,
+  total: history.total,
+  metrics,
+};
+---
+
+<section class="chart-card" data-telemetry-chart>
+  <div class="chart-header">
+    <div>
+      <h2 class="chart-title">历史趋势曲线与统计</h2>
+      <p class="chart-subtitle">
+        展示最近 {itemsAsc.length} 次采样趋势（总累计样本 {history.total ?? sampleCount} 条），支持悬停查看单点详情
+      </p>
+    </div>
+
+    <div class="chart-tabs" role="tablist" aria-label="遥测维度切换">
+      {
+        metrics.map((m, idx) => (
+          <button
+            type="button"
+            role="tab"
+            class={`chart-tab ${idx === 0 ? 'is-active' : ''}`}
+            aria-selected={idx === 0 ? 'true' : 'false'}
+            data-metric-tab={m.key}
+            data-chart-tab={m.key}
+            style={`--tab-color: ${m.color};`}
+          >
+            <span class="tab-dot" aria-hidden="true" />
+            <span>{m.shortLabel}</span>
+          </button>
+        ))
+      }
+    </div>
+  </div>
+
+  <div class="chart-stage" data-chart-stage>
+    {
+      itemsAsc.length === 0 ? (
+        <div class="chart-empty">
+          <p>暂无历史遥测数据</p>
+        </div>
+      ) : (
+        <div class="svg-wrap">
+          <svg
+            class="trend-svg"
+            viewBox={`0 0 ${VB_W} ${VB_H}`}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label="设备遥测历史趋势图"
+            data-trend-svg
+          >
+            <g data-grid-layer>
+              {initialGeom.ticks.map((tick) => (
+                <g>
+                  <line
+                    x1={PAD.left}
+                    y1={tick.y}
+                    x2={VB_W - PAD.right}
+                    y2={tick.y}
+                    stroke="rgba(28, 32, 27, 0.12)"
+                    stroke-dasharray="2 4"
+                    stroke-width="1"
+                  />
+                  <text
+                    x={PAD.left - 10}
+                    y={tick.y + 4}
+                    text-anchor="end"
+                    fill="#5a5e56"
+                    font-size="11"
+                  >
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+            </g>
+
+            <path
+              d={initialGeom.areaPath}
+              fill="rgba(35, 83, 59, 0.08)"
+              data-area-path
+            />
+            <path
+              d={initialGeom.linePath}
+              fill="none"
+              stroke={initialMetric.color}
+              stroke-width="2.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              data-line-path
+            />
+
+            <g data-xaxis-layer>
+              {initialGeom.xLabels.map((xl) => (
+                <text
+                  x={xl.x}
+                  y={VB_H - 10}
+                  text-anchor="middle"
+                  fill="#64748b"
+                  font-size="11"
+                >
+                  {xl.label}
+                </text>
+              ))}
+            </g>
+
+            <line
+              x1="0"
+              y1={PAD.top}
+              x2="0"
+              y2={PAD.top + PLOT_H}
+              stroke="rgba(15, 23, 42, 0.22)"
+              stroke-width="1.2"
+              stroke-dasharray="3 3"
+              opacity="0"
+              data-crosshair
+            />
+
+            <g data-dots-layer>
+              {initialGeom.coords.map((pt, idx) => (
+                <circle
+                  cx={pt.x}
+                  cy={pt.y}
+                  r="3.2"
+                  fill="#ffffff"
+                  stroke={initialMetric.color}
+                  stroke-width="2"
+                  data-dot-idx={idx}
+                />
+              ))}
+            </g>
+
+            <circle
+              cx="0"
+              cy="0"
+              r="6"
+              fill={initialMetric.color}
+              stroke="#ffffff"
+              stroke-width="2.5"
+              opacity="0"
+              data-active-dot
+            />
+
+            <rect
+              x={PAD.left}
+              y={PAD.top}
+              width={PLOT_W}
+              height={PLOT_H}
+              fill="transparent"
+              data-hit-area
+            />
+          </svg>
+
+          <div class="chart-tooltip" data-chart-tooltip hidden>
+            <div class="tooltip-time" data-tooltip-time></div>
+            <div class="tooltip-val" data-tooltip-val></div>
+            <div class="tooltip-meta" data-tooltip-meta></div>
+          </div>
+        </div>
+      )
+    }
+  </div>
+
+  <div class="stats-bar" data-stats-bar>
+    <div class="stat-pill">
+      <span class="stat-label">统计样本数</span>
+      <strong class="stat-value" data-stat-count>{sampleCount} 条</strong>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">最低值 (Min)</span>
+      <strong class="stat-value" data-stat-min>
+        {formatStatVal(initialStats.min, initialMetric.decimals, initialMetric.unit)}
+      </strong>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">最高值 (Max)</span>
+      <strong class="stat-value" data-stat-max>
+        {formatStatVal(initialStats.max, initialMetric.decimals, initialMetric.unit)}
+      </strong>
+    </div>
+    <div class="stat-pill">
+      <span class="stat-label">平均值 (Avg)</span>
+      <strong class="stat-value" data-stat-avg>
+        {formatStatVal(initialStats.avg, initialMetric.decimals, initialMetric.unit)}
+      </strong>
+    </div>
+  </div>
+
+  <details class="history-details" open>
+    <summary class="history-summary">
+      <span>最近 10 条历史遥测记录</span>
+      <span class="history-count-tag">共 {recentTen.length} 条</span>
+    </summary>
+
+    {
+      recentTen.length === 0 ? (
+        <p class="history-empty">暂无历史记录</p>
+      ) : (
+        <div class="table-scroll">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>采集时刻</th>
+                <th>温度</th>
+                <th>空气湿度</th>
+                <th>土壤湿度</th>
+                <th>光照</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentTen.map((row) => (
+                <tr>
+                  <td class="mono">{formatClock(row.received_at_ms)}</td>
+                  <td>{row.temperature.toFixed(2)} ℃</td>
+                  <td>{row.air_humidity.toFixed(2)} %</td>
+                  <td>{row.soil_humidity.toFixed(2)} %</td>
+                  <td>{Math.round(row.lux)} lx</td>
+                  <td>
+                    <div class="mini-badges">
+                      <span class={`mini-pill ${row.water === 1 ? 'pill-ok' : 'pill-warn'}`}>
+                        {row.water === 1 ? '水足' : '缺水'}
+                      </span>
+                      {row.fan === 1 && <span class="mini-pill pill-info">风扇</span>}
+                      {row.light === 1 && <span class="mini-pill pill-amber">补光</span>}
+                      {row.heat === 1 && <span class="mini-pill pill-rose">加热</span>}
+                      {row.fan === 0 && row.light === 0 && row.heat === 0 && (
+                        <span class="mini-pill pill-muted">执行器待机</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+  </details>
+
+  <script type="application/json" data-telemetry-payload set:html={JSON.stringify(chartPayload).replace(/</g, '\\u003c')} />
+</section>
+
+<script>
+  interface ChartPoint {
+    seq: number;
+    up: number;
+    temperature: number;
+    air_humidity: number;
+    soil_humidity: number;
+    lux: number;
+    water: 0 | 1;
+    fan: 0 | 1;
+    light: 0 | 1;
+    heat: 0 | 1;
+    received_at: string;
+    received_at_ms: number;
+  }
+
+  type MetricKey = 'temperature' | 'air_humidity' | 'soil_humidity' | 'lux';
+
+  interface MetricMeta {
+    key: MetricKey;
+    label: string;
+    shortLabel: string;
+    unit: string;
+    color: string;
+    decimals: number;
+  }
+
+  interface MetricStats {
+    min: number | null;
+    max: number | null;
+    avg: number | null;
+  }
+
+  interface ChartPayload {
+    deviceId: string;
+    points: ChartPoint[];
+    total: number;
+    stats: {
+      count: number;
+      temperature: MetricStats;
+      air_humidity: MetricStats;
+      soil_humidity: MetricStats;
+      lux: MetricStats;
+    };
+    metrics: MetricMeta[];
+  }
+
+  const VB_W = 820;
+  const VB_H = 260;
+  const PAD = { top: 20, right: 20, bottom: 34, left: 56 };
+  const PLOT_W = VB_W - PAD.left - PAD.right;
+  const PLOT_H = VB_H - PAD.top - PAD.bottom;
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function fmtTimeShort(ms: number): string {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function fmtDateTimeFull(ms: number): string {
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function fmtMetricValue(val: number | null, decimals: number, unit: string): string {
+    if (val === null || !Number.isFinite(val)) return '-';
+    const num = decimals === 0 ? String(Math.round(val)) : val.toFixed(decimals);
+    return `${num} ${unit}`;
+  }
+
+  function computeChartGeometry(points: ChartPoint[], metric: MetricMeta) {
+    if (points.length === 0) {
+      return { coords: [], linePath: '', areaPath: '', ticks: [], xLabels: [] };
+    }
+
+    const values = points.map((p) => Number(p[metric.key]));
+    let minVal = Math.min(...values);
+    let maxVal = Math.max(...values);
+
+    if (minVal === maxVal) {
+      const pad = metric.key === 'lux' ? Math.max(50, Math.abs(minVal) * 0.1) : 2;
+      minVal -= pad;
+      maxVal += pad;
+    } else {
+      const span = maxVal - minVal;
+      minVal -= span * 0.12;
+      maxVal += span * 0.12;
+    }
+
+    if (metric.key !== 'temperature' && minVal < 0) {
+      minVal = 0;
+    }
+
+    const range = maxVal - minVal || 1;
+    const coords = points.map((p, idx) => {
+      const x =
+        points.length === 1
+          ? PAD.left + PLOT_W / 2
+          : PAD.left + (idx / (points.length - 1)) * PLOT_W;
+      const rawY = PAD.top + PLOT_H - ((Number(p[metric.key]) - minVal) / range) * PLOT_H;
+      const y = Math.max(PAD.top, Math.min(PAD.top + PLOT_H, rawY));
+      return { x, y, val: Number(p[metric.key]), point: p };
+    });
+
+    const clampY = (val: number) => Math.max(PAD.top, Math.min(PAD.top + PLOT_H, val));
+    let linePath = '';
+    if (coords.length === 1) {
+      linePath = `M ${PAD.left.toFixed(1)} ${coords[0].y.toFixed(1)} L ${(PAD.left + PLOT_W).toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    } else {
+      linePath = `M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`;
+      for (let i = 0; i < coords.length - 1; i++) {
+        const p0 = coords[i - 1] ?? coords[i];
+        const p1 = coords[i];
+        const p2 = coords[i + 1];
+        const p3 = coords[i + 2] ?? p2;
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        const cp1y = clampY(p1.y + (p2.y - p0.y) / 6);
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        const cp2y = clampY(p2.y - (p3.y - p1.y) / 6);
+        linePath += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+      }
+    }
+
+    const baseBottom = (PAD.top + PLOT_H).toFixed(2);
+    const areaPath =
+      coords.length === 1
+        ? `M ${PAD.left.toFixed(2)} ${coords[0].y.toFixed(2)} L ${(PAD.left + PLOT_W).toFixed(2)} ${coords[0].y.toFixed(2)} L ${(PAD.left + PLOT_W).toFixed(2)} ${baseBottom} L ${PAD.left.toFixed(2)} ${baseBottom} Z`
+        : `${linePath} L ${coords[coords.length - 1].x.toFixed(2)} ${baseBottom} L ${coords[0].x.toFixed(2)} ${baseBottom} Z`;
+
+    const ticks = Array.from({ length: 5 }, (_, idx) => {
+      const ratio = idx / 4;
+      const val = maxVal - ratio * range;
+      const y = PAD.top + ratio * PLOT_H;
+      const label = metric.decimals === 0 ? String(Math.round(val)) : val.toFixed(1);
+      return { y, label };
+    });
+
+    const labelIndices =
+      coords.length <= 1
+        ? [0]
+        : coords.length <= 4
+        ? coords.map((_, idx) => idx)
+        : [0, Math.floor((coords.length - 1) / 3), Math.floor(((coords.length - 1) * 2) / 3), coords.length - 1];
+
+    const xLabels = Array.from(new Set(labelIndices)).map((idx) => ({
+      x: coords[idx].x,
+      label: fmtTimeShort(coords[idx].point.received_at_ms),
+    }));
+
+    return { coords, linePath, areaPath, ticks, xLabels };
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-telemetry-chart]').forEach((root) => {
+    const payloadScript = root.querySelector<HTMLScriptElement>('[data-telemetry-payload]');
+    if (!payloadScript?.textContent) return;
+
+    let payload: ChartPayload;
+    try {
+      payload = JSON.parse(payloadScript.textContent) as ChartPayload;
+    } catch {
+      return;
+    }
+
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-metric-tab]'));
+    const svg = root.querySelector<SVGSVGElement>('[data-trend-svg]');
+    const gridLayer = root.querySelector<SVGGElement>('[data-grid-layer]');
+    const xaxisLayer = root.querySelector<SVGGElement>('[data-xaxis-layer]');
+    const dotsLayer = root.querySelector<SVGGElement>('[data-dots-layer]');
+    const areaPathEl = root.querySelector<SVGPathElement>('[data-area-path]');
+    const linePathEl = root.querySelector<SVGPathElement>('[data-line-path]');
+    const crosshair = root.querySelector<SVGLineElement>('[data-crosshair]');
+    const activeDot = root.querySelector<SVGCircleElement>('[data-active-dot]');
+    const hitArea = root.querySelector<SVGRectElement>('[data-hit-area]');
+
+    const tooltip = root.querySelector<HTMLElement>('[data-chart-tooltip]');
+    const tooltipTime = root.querySelector<HTMLElement>('[data-tooltip-time]');
+    const tooltipVal = root.querySelector<HTMLElement>('[data-tooltip-val]');
+    const tooltipMeta = root.querySelector<HTMLElement>('[data-tooltip-meta]');
+
+    const statCountEl = root.querySelector<HTMLElement>('[data-stat-count]');
+    const statMinEl = root.querySelector<HTMLElement>('[data-stat-min]');
+    const statMaxEl = root.querySelector<HTMLElement>('[data-stat-max]');
+    const statAvgEl = root.querySelector<HTMLElement>('[data-stat-avg]');
+
+    let activeMetric: MetricMeta = payload.metrics[0];
+    let currentCoords = computeChartGeometry(payload.points, activeMetric).coords;
+
+    function updateStats(metric: MetricMeta) {
+      const mStats = payload.stats?.[metric.key] ?? { min: null, max: null, avg: null };
+      if (statCountEl) {
+        const cnt = payload.stats?.count ?? payload.total ?? payload.points.length;
+        statCountEl.textContent = `${cnt} 条`;
+      }
+      if (statMinEl) statMinEl.textContent = fmtMetricValue(mStats.min, metric.decimals, metric.unit);
+      if (statMaxEl) statMaxEl.textContent = fmtMetricValue(mStats.max, metric.decimals, metric.unit);
+      if (statAvgEl) statAvgEl.textContent = fmtMetricValue(mStats.avg, metric.decimals, metric.unit);
+    }
+
+    function hideHover() {
+      if (crosshair) crosshair.setAttribute('opacity', '0');
+      if (activeDot) activeDot.setAttribute('opacity', '0');
+      if (tooltip) tooltip.hidden = true;
+    }
+
+    function renderMetric(key: MetricKey) {
+      const metric = payload.metrics.find((m) => m.key === key);
+      if (!metric) return;
+      activeMetric = metric;
+
+      tabs.forEach((t) => {
+        const isCurrent = t.dataset.metricTab === key;
+        t.classList.toggle('is-active', isCurrent);
+        t.setAttribute('aria-selected', isCurrent ? 'true' : 'false');
+      });
+
+      updateStats(metric);
+      hideHover();
+
+      if (!svg || payload.points.length === 0) return;
+
+      const geom = computeChartGeometry(payload.points, metric);
+      currentCoords = geom.coords;
+
+      // Flat Clay & Pine blueprint tint applied via CSS [data-area-path]
+      if (areaPathEl) areaPathEl.setAttribute('d', geom.areaPath);
+      if (linePathEl) {
+        linePathEl.setAttribute('d', geom.linePath);
+        linePathEl.setAttribute('stroke', metric.color);
+      }
+      if (activeDot) activeDot.setAttribute('fill', metric.color);
+
+      if (gridLayer) {
+        gridLayer.innerHTML = '';
+        for (const tick of geom.ticks) {
+          const line = document.createElementNS(SVG_NS, 'line');
+          line.setAttribute('x1', String(PAD.left));
+          line.setAttribute('y1', String(tick.y));
+          line.setAttribute('x2', String(VB_W - PAD.right));
+          line.setAttribute('y2', String(tick.y));
+          line.setAttribute('stroke', 'rgba(148, 163, 184, 0.25)');
+          line.setAttribute('stroke-dasharray', '4 4');
+          line.setAttribute('stroke-width', '1');
+
+          const text = document.createElementNS(SVG_NS, 'text');
+          text.setAttribute('x', String(PAD.left - 10));
+          text.setAttribute('y', String(tick.y + 4));
+          text.setAttribute('text-anchor', 'end');
+          text.setAttribute('fill', '#64748b');
+          text.setAttribute('font-size', '11');
+          text.textContent = tick.label;
+
+          gridLayer.appendChild(line);
+          gridLayer.appendChild(text);
+        }
+      }
+
+      if (xaxisLayer) {
+        xaxisLayer.innerHTML = '';
+        for (const xl of geom.xLabels) {
+          const text = document.createElementNS(SVG_NS, 'text');
+          text.setAttribute('x', String(xl.x));
+          text.setAttribute('y', String(VB_H - 10));
+          text.setAttribute('text-anchor', 'middle');
+          text.setAttribute('fill', '#64748b');
+          text.setAttribute('font-size', '11');
+          text.textContent = xl.label;
+          xaxisLayer.appendChild(text);
+        }
+      }
+
+      if (dotsLayer) {
+        dotsLayer.innerHTML = '';
+        geom.coords.forEach((pt, idx) => {
+          const dot = document.createElementNS(SVG_NS, 'circle');
+          dot.setAttribute('cx', String(pt.x));
+          dot.setAttribute('cy', String(pt.y));
+          dot.setAttribute('r', '3.2');
+          dot.setAttribute('fill', '#ffffff');
+          dot.setAttribute('stroke', metric.color);
+          dot.setAttribute('stroke-width', '2');
+          dot.setAttribute('data-dot-idx', String(idx));
+          dotsLayer.appendChild(dot);
+        });
+      }
+    }
+
+    function handlePointerMove(clientX: number) {
+      if (!svg || currentCoords.length === 0) return;
+      const rect = svg.getBoundingClientRect();
+      if (rect.width <= 0) return;
+
+      const svgX = ((clientX - rect.left) / rect.width) * VB_W;
+      let nearest = currentCoords[0];
+      let minDist = Math.abs(svgX - nearest.x);
+
+      for (let i = 1; i < currentCoords.length; i++) {
+        const dist = Math.abs(svgX - currentCoords[i].x);
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = currentCoords[i];
+        }
+      }
+
+      if (crosshair) {
+        crosshair.setAttribute('x1', String(nearest.x));
+        crosshair.setAttribute('x2', String(nearest.x));
+        crosshair.setAttribute('opacity', '1');
+      }
+
+      if (activeDot) {
+        activeDot.setAttribute('cx', String(nearest.x));
+        activeDot.setAttribute('cy', String(nearest.y));
+        activeDot.setAttribute('fill', activeMetric.color);
+        activeDot.setAttribute('opacity', '1');
+      }
+
+      if (tooltip && tooltipTime && tooltipVal && tooltipMeta) {
+        tooltip.hidden = false;
+        tooltipTime.textContent = fmtDateTimeFull(nearest.point.received_at_ms);
+        tooltipVal.textContent = `${activeMetric.label}：${fmtMetricValue(
+          nearest.val,
+          activeMetric.decimals,
+          activeMetric.unit
+        )}`;
+        tooltipVal.style.color = activeMetric.color;
+        tooltipMeta.textContent = `水位${nearest.point.water === 1 ? '充足' : '缺水'}`;
+
+        const xPct = (nearest.x / VB_W) * 100;
+        const yPct = (nearest.y / VB_H) * 100;
+        tooltip.style.left = `${xPct}%`;
+        tooltip.style.top = `${Math.max(10, yPct - 6)}%`;
+        tooltip.classList.toggle('align-right', xPct > 68);
+        tooltip.classList.toggle('align-left', xPct < 24);
+      }
+    }
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const key = tab.dataset.metricTab as MetricKey | undefined;
+        if (key) renderMetric(key);
+      });
+    });
+
+    if (hitArea) {
+      hitArea.addEventListener('mousemove', (ev) => {
+        handlePointerMove(ev.clientX);
+      });
+      hitArea.addEventListener('touchmove', (ev) => {
+        if (ev.touches.length > 0) {
+          handlePointerMove(ev.touches[0].clientX);
+        }
+      });
+      hitArea.addEventListener('mouseleave', hideHover);
+      hitArea.addEventListener('touchend', hideHover);
+    }
+  });
+</script>
+
+<style>
+  .chart-card {
+    background: var(--surface-elevated, #faf8f4);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    border-radius: var(--r-lg, 8px);
+    padding: 1.25rem 1.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .chart-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.9rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .chart-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink, #1c201b);
+  }
+
+  .chart-subtitle {
+    margin: 0.2rem 0 0;
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .chart-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .chart-tab {
+    appearance: none;
+    min-height: 44px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    padding: 0.5rem 0.9rem;
+    border-radius: 0;
+    margin-bottom: -1px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted, #5a5e56);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: inherit;
+    transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
+  }
+
+  .tab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 1px;
+    background: var(--tab-color, #23533b);
+    opacity: 0.55;
+  }
+
+  .chart-tab:hover {
+    color: var(--ink, #1c201b);
+    background: rgba(28, 32, 27, 0.03);
+  }
+
+  .chart-tab:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: -2px;
+  }
+
+  .chart-tab.is-active {
+    color: var(--ink, #1c201b);
+    border-bottom-color: var(--accent, #23533b);
+  }
+
+  .chart-tab.is-active .tab-dot {
+    opacity: 1;
+    background: var(--accent, #23533b);
+  }
+
+  .chart-stage {
+    position: relative;
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: var(--r-md, 6px);
+    background: var(--bg, #f4f1ea);
+    padding: 0.85rem 0.75rem 0.5rem;
+  }
+
+  .svg-wrap {
+    position: relative;
+    width: 100%;
+  }
+
+  .trend-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    user-select: none;
+    touch-action: pan-y;
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+  }
+
+  .trend-svg :global([data-grid-layer] line) {
+    stroke: rgba(28, 32, 27, 0.12);
+    stroke-dasharray: 2 4;
+  }
+
+  .trend-svg :global([data-grid-layer] text),
+  .trend-svg :global([data-xaxis-layer] text) {
+    fill: var(--muted, #5a5e56);
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+  }
+
+  .trend-svg :global([data-area-path]) {
+    fill: rgba(35, 83, 59, 0.08);
+  }
+
+  .trend-svg :global([data-line-path]) {
+    stroke: var(--accent, #23533b);
+    stroke-width: 2;
+  }
+
+  .trend-svg :global([data-dots-layer] circle) {
+    fill: var(--surface-elevated, #faf8f4);
+    stroke: var(--accent, #23533b);
+    stroke-width: 1.75;
+  }
+
+  .trend-svg :global([data-crosshair]) {
+    stroke: var(--ink, #1c201b);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+
+  .trend-svg :global([data-active-dot]) {
+    fill: var(--accent, #23533b);
+    stroke: var(--surface-elevated, #faf8f4);
+    stroke-width: 2;
+  }
+
+  .chart-empty {
+    min-height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted, #5a5e56);
+    font-size: 0.9375rem;
+    padding: 1.5rem;
+  }
+
+  .chart-tooltip {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    background: var(--inverse-bg, #181c18);
+    color: #f4f1ea;
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    padding: 0.55rem 0.78rem;
+    border-radius: var(--r-sm, 4px);
+    font-size: 0.8125rem;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 10;
+  }
+
+  .chart-tooltip.align-right {
+    transform: translate(-92%, -100%);
+  }
+
+  .chart-tooltip.align-left {
+    transform: translate(-8%, -100%);
+  }
+
+  .tooltip-time {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+    color: rgba(244, 241, 234, 0.74);
+    margin-bottom: 0.15rem;
+  }
+
+  .tooltip-val {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: #f4f1ea !important;
+    background: transparent;
+    display: block;
+    padding: 0;
+    margin-bottom: 0.15rem;
+  }
+
+  .tooltip-meta {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+    color: rgba(244, 241, 234, 0.74);
+  }
+
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: var(--r-md, 6px);
+    background: var(--bg, #f4f1ea);
+    overflow: hidden;
+  }
+
+  .stat-pill {
+    padding: 0.72rem 0.95rem;
+    border-right: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .stat-pill:last-child {
+    border-right: none;
+  }
+
+  .stat-label {
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .stat-value {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-size: 1.0625rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .history-details {
+    border-top: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    padding-top: 0.85rem;
+  }
+
+  .history-summary {
+    cursor: pointer;
+    min-height: 44px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    list-style: none;
+    padding: 0.25rem 0;
+  }
+
+  .history-summary:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: 2px;
+  }
+
+  .history-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .history-count-tag {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.16rem 0.55rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--bg, #f4f1ea);
+    color: var(--ink, #1c201b);
+  }
+
+  .history-empty {
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+    margin: 0.75rem 0 0;
+  }
+
+  .table-scroll {
+    margin-top: 0.75rem;
+    overflow-x: auto;
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: var(--r-md, 6px);
+    background: var(--surface-elevated, #faf8f4);
+  }
+
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .history-table th {
+    background: var(--surface, #e7e0d3);
+    color: var(--ink, #1c201b);
+    font-weight: 500;
+    font-size: 0.8125rem;
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+  }
+
+  .history-table td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    color: var(--ink, #1c201b);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .history-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .history-table tbody tr:hover td {
+    background: var(--bg, #f4f1ea);
+  }
+
+  .mono {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mini-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .mini-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.14rem 0.48rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    font-size: 0.8125rem;
+    font-weight: 500;
+  }
+
+  .pill-ok {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.3);
+    color: var(--accent, #23533b);
+  }
+  .pill-warn {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.35);
+    color: var(--danger, #b42318);
+  }
+  .pill-info {
+    background: var(--bg, #f4f1ea);
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--ink, #1c201b);
+  }
+  .pill-amber {
+    background: var(--surface, #e7e0d3);
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--ink, #1c201b);
+  }
+  .pill-rose {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.35);
+    color: var(--danger, #b42318);
+  }
+  .pill-muted {
+    background: transparent;
+    border-color: var(--line, rgba(28, 32, 27, 0.14));
+    color: var(--muted, #5a5e56);
+  }
+
+  @media (max-width: 720px) {
+    .stats-bar {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stat-pill {
+      border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    }
+    .stat-pill:nth-child(2n) {
+      border-right: none;
+    }
+    .stat-pill:nth-last-child(-n + 2) {
+      border-bottom: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chart-tab {
+      transition: none;
+    }
+  }
+</style>

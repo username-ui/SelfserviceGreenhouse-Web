@@ -1,0 +1,332 @@
+---
+import AppLayout from '../layouts/AppLayout.astro';
+import DeviceCard from '../components/DeviceCard.astro';
+import AddDeviceModal from '../components/AddDeviceModal.astro';
+import { fetchBackendHealth, fetchUserDevicesSnapshots } from '../lib/backend';
+import type { UserDeviceSnapshot } from '../types/greenhouse';
+
+const user = Astro.locals.user;
+const token = Astro.locals.token || '';
+if (!user) {
+  return Astro.redirect('/login');
+}
+
+const [snapshots, health] = await Promise.all([
+  fetchUserDevicesSnapshots(token),
+  fetchBackendHealth(),
+]);
+
+const totalDevices = snapshots.length;
+const onlineDevices = snapshots.filter((s: UserDeviceSnapshot) => s.online).length;
+const offlineDevices = totalDevices - onlineDevices;
+const activeAlarmCount = snapshots.reduce(
+  (sum: number, s: UserDeviceSnapshot) => sum + s.active_alarm_count,
+  0
+);
+
+const telemetrySamples = snapshots
+  .map((s: UserDeviceSnapshot) => s.latest_telemetry)
+  .filter((t): t is NonNullable<UserDeviceSnapshot['latest_telemetry']> => t !== null);
+
+const avgTemp =
+  telemetrySamples.length > 0
+    ? (
+        telemetrySamples.reduce((sum, t) => sum + t.temperature, 0) /
+        telemetrySamples.length
+      ).toFixed(1)
+    : null;
+
+const avgHumidity =
+  telemetrySamples.length > 0
+    ? (
+        telemetrySamples.reduce((sum, t) => sum + t.air_humidity, 0) /
+        telemetrySamples.length
+      ).toFixed(1)
+    : null;
+---
+
+<AppLayout title="工作台 - 智农温室云控" user={user} showNav={true} health={health}>
+  <div class="wrap">
+    <section class="welcome-header" data-enter>
+      <div>
+        <div class="eyebrow">智能温室工作台</div>
+        <h1 class="welcome-title">你好，{user.displayName}</h1>
+        <p class="welcome-subtitle">
+          实时监测温室环境数据、设备在线状态与告警信息
+        </p>
+      </div>
+
+      <button
+        type="button"
+        class="btn btn-primary btn-lg"
+        data-open-add-device
+        data-testid="open-add-device-btn"
+      >
+        + 添加设备
+      </button>
+    </section>
+
+    <section class="summary-strip" aria-label="核心概览统计" data-enter>
+      <div class="summary-cell">
+        <span class="summary-label">我的设备总数</span>
+        <span class="summary-value">{totalDevices}</span>
+        <span class="summary-foot">已添加的温室设备</span>
+      </div>
+
+      <div class="summary-cell">
+        <span class="summary-label">在线设备</span>
+        <span class="summary-value" style={onlineDevices > 0 ? 'color: var(--accent);' : ''}>
+          {onlineDevices} / {totalDevices}
+        </span>
+        <span class="summary-foot">
+          {totalDevices === 0
+            ? '暂无设备'
+            : offlineDevices > 0
+              ? `${offlineDevices} 台设备离线`
+              : '全部设备在线运行'}
+        </span>
+      </div>
+
+      <div class="summary-cell">
+        <span class="summary-label">活跃告警</span>
+        <span
+          class="summary-value"
+          style={activeAlarmCount > 0 ? 'color: var(--danger);' : 'color: var(--accent);'}
+        >
+          {activeAlarmCount}
+        </span>
+        <span class="summary-foot">
+          {activeAlarmCount > 0 ? '请进入对应设备排查处理' : '当前无异常告警'}
+        </span>
+      </div>
+
+      <div class="summary-cell">
+        <span class="summary-label">平均温湿度</span>
+        <span class="summary-value">
+          {avgTemp !== null && avgHumidity !== null ? `${avgTemp}℃ / ${avgHumidity}%` : '-'}
+        </span>
+        <span class="summary-foot">
+          {telemetrySamples.length > 0
+            ? `基于 ${telemetrySamples.length} 台设备实时读数`
+            : '暂无环境读数'}
+        </span>
+      </div>
+    </section>
+
+    <section aria-label="我的温室设备列表">
+      <div class="section-header">
+        <h2 class="section-title">
+          我的温室设备
+          <span class="badge badge-neutral mono">{totalDevices}</span>
+        </h2>
+      </div>
+
+      {snapshots.length === 0 ? (
+        <div class="card empty-state" data-testid="empty-devices-state">
+          <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="square" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M3 10h18" />
+            <path d="M9 20v-6h6v6" />
+          </svg>
+          <h3 class="empty-state-title">名下暂无温室设备</h3>
+          <p class="empty-state-desc">
+            点击下方「+ 添加设备」输入温室控制器编号，即可开始监测大棚实时环境并设置调控参数。
+          </p>
+          <button type="button" class="btn btn-primary btn-lg" data-open-add-device>
+            + 添加设备
+          </button>
+        </div>
+      ) : (
+        <div id="devices-grid" class="devices-grid">
+          {snapshots.map((snapshot: UserDeviceSnapshot) => (
+            <DeviceCard snapshot={snapshot} />
+          ))}
+        </div>
+      )}
+    </section>
+  </div>
+
+  <AddDeviceModal currentUsername={user.username} />
+
+  <div
+    id="unbind-confirm-modal"
+    class="modal-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="unbind-modal-title"
+    hidden
+  >
+    <div class="modal-dialog" style="max-width: 460px;">
+      <div class="modal-header">
+        <div>
+          <h2 id="unbind-modal-title" class="modal-title">确认解绑设备</h2>
+          <p class="modal-subtitle">解绑后需重新输入设备编号添加</p>
+        </div>
+        <button type="button" class="modal-close" data-close-unbind aria-label="关闭确认框">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" aria-hidden="true">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom: 14px; color: var(--ink);">
+          确定要将温室设备 <strong id="unbind-target-name"></strong>（<span id="unbind-target-id" class="mono"></span>）从您的账号解绑吗？
+        </p>
+        <div class="alert alert-danger">
+          <span class="alert-icon mono" aria-hidden="true">!</span>
+          <span>解绑后该设备将从您的工作台移除。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close-unbind>取消</button>
+        <button type="button" id="unbind-confirm-btn" class="btn btn-danger">确认解绑</button>
+      </div>
+    </div>
+  </div>
+
+  <script is:inline>
+    (() => {
+      const devicesGrid = document.getElementById('devices-grid');
+      const unbindModal = document.getElementById('unbind-confirm-modal');
+      const unbindNameEl = document.getElementById('unbind-target-name');
+      const unbindIdEl = document.getElementById('unbind-target-id');
+      const unbindConfirmBtn = document.getElementById('unbind-confirm-btn');
+
+      let pendingUnbindId = '';
+
+      function openUnbindModal(deviceId, deviceName) {
+        if (!unbindModal || !unbindNameEl || !unbindIdEl) return;
+        pendingUnbindId = deviceId;
+        unbindNameEl.textContent = deviceName || deviceId;
+        unbindIdEl.textContent = deviceId;
+        unbindModal.hidden = false;
+        unbindModal.classList.add('is-open');
+      }
+
+      function closeUnbindModal() {
+        if (!unbindModal) return;
+        pendingUnbindId = '';
+        unbindModal.classList.remove('is-open');
+        unbindModal.hidden = true;
+      }
+
+      document.addEventListener('click', (e) => {
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest('[data-close-unbind]') || target === unbindModal) {
+          closeUnbindModal();
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && unbindModal?.classList.contains('is-open')) {
+          closeUnbindModal();
+        }
+      });
+
+      if (unbindConfirmBtn) {
+        unbindConfirmBtn.addEventListener('click', async () => {
+          if (!pendingUnbindId) return;
+          const targetId = pendingUnbindId;
+          unbindConfirmBtn.setAttribute('disabled', 'true');
+          unbindConfirmBtn.textContent = '解绑中...';
+
+          try {
+            const res = await fetch(`/api/devices/${encodeURIComponent(targetId)}`, {
+              method: 'DELETE',
+            });
+            let payload = null;
+            try {
+              payload = await res.json();
+            } catch {
+              payload = null;
+            }
+
+            if (res.ok && payload?.ok) {
+              if (typeof window.showToastNextLoad === 'function') {
+                window.showToastNextLoad(`已解绑设备 ${targetId}`, 'success');
+              }
+              closeUnbindModal();
+              window.location.reload();
+              return;
+            }
+
+            const errMsg = payload?.message || `解绑失败 (${res.status})`;
+            if (typeof window.showToast === 'function') {
+              window.showToast(errMsg, 'error');
+            }
+          } catch {
+            if (typeof window.showToast === 'function') {
+              window.showToast('网络请求异常，请稍后重试', 'error');
+            }
+          } finally {
+            unbindConfirmBtn.removeAttribute('disabled');
+            unbindConfirmBtn.textContent = '确认解绑';
+          }
+        });
+      }
+
+      if (devicesGrid) {
+        devicesGrid.addEventListener('click', async (e) => {
+          const target = e.target;
+          if (!(target instanceof Element)) return;
+
+          const simBtn = target.closest('[data-simulate-device]');
+          if (simBtn instanceof HTMLButtonElement) {
+            const deviceId = simBtn.getAttribute('data-simulate-device');
+            if (!deviceId) return;
+
+            simBtn.disabled = true;
+            const prevText = simBtn.textContent;
+            simBtn.textContent = '采集模拟中...';
+
+            try {
+              const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/simulate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scenario: 'normal' }),
+              });
+              let payload = null;
+              try {
+                payload = await res.json();
+              } catch {
+                payload = null;
+              }
+
+              if (res.ok && payload?.ok) {
+                if (typeof window.showToastNextLoad === 'function') {
+                  window.showToastNextLoad(`设备 ${deviceId} 模拟遥测数据已刷新`, 'success');
+                }
+                window.location.reload();
+                return;
+              }
+
+              const msg = payload?.message || `模拟刷新失败 (${res.status})`;
+              if (typeof window.showToast === 'function') {
+                window.showToast(msg, 'error');
+              }
+            } catch {
+              if (typeof window.showToast === 'function') {
+                window.showToast('网络异常，模拟刷新失败', 'error');
+              }
+            } finally {
+              simBtn.disabled = false;
+              simBtn.textContent = prevText || '模拟上报';
+            }
+            return;
+          }
+
+          const unbindBtn = target.closest('[data-unbind-device]');
+          if (unbindBtn instanceof HTMLButtonElement) {
+            const deviceId = unbindBtn.getAttribute('data-unbind-device') || '';
+            const deviceName = unbindBtn.getAttribute('data-unbind-name') || deviceId;
+            if (deviceId) {
+              openUnbindModal(deviceId, deviceName);
+            }
+          }
+        });
+      }
+    })();
+  </script>
+</AppLayout>

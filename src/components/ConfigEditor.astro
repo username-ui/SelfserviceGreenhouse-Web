@@ -1,0 +1,1309 @@
+---
+import type { ConfigFieldKey, ConfigGroupId, DeviceConfig } from '../types/greenhouse';
+import { CONFIG_META } from '../lib/validator';
+
+interface Props {
+  deviceId: string;
+  config: DeviceConfig;
+}
+
+const { deviceId, config } = Astro.props;
+
+const rawHumanMap = (config.human ?? {}) as Record<string, number>;
+const hasSavedConfig = Object.keys(rawHumanMap).length > 0;
+const currentHuman: Record<string, number> = hasSavedConfig ? { ...rawHumanMap } : {};
+
+const GROUPS: Array<{ id: ConfigGroupId; code: string; label: string; desc: string }> = [
+  { id: 'temperature', code: '01', label: '温度控制', desc: '温室温度上下限与回滞范围 (℃)' },
+  { id: 'humidity', code: '02', label: '湿度控制', desc: '空气与土壤相对湿度控制范围 (%RH)' },
+  { id: 'light', code: '03', label: '光照与昼夜窗口', desc: '补光光照阈值与昼夜时间窗口' },
+  { id: 'irrigation', code: '04', label: '自动灌溉控制', desc: '单次浇水时长、冷却间隔与每日上限' },
+  { id: 'turntable', code: '05', label: '转盘与采样', desc: '环境采样周期与种植转盘运行参数' },
+];
+
+const MS_FIELDS = new Set<ConfigFieldKey>([
+  'luxOnMs',
+  'dayStartMs',
+  'dayLenMs',
+  'pumpMs',
+  'pumpIntervalMs',
+  'sampleMs',
+  'turnIntervalMs',
+]);
+
+const TURN_DIVISORS = [15, 30, 45, 60, 90, 180];
+
+function formatDurationHelper(key: ConfigFieldKey, val: number): string {
+  if (!Number.isFinite(val) || val < 0) return '-';
+  if (key === 'dayStartMs') {
+    const totalSec = Math.floor(val / 1000);
+    const hh = Math.floor(totalSec / 3600) % 24;
+    const mm = Math.floor((totalSec % 3600) / 60);
+    const ss = totalSec % 60;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `当天 ${pad(hh)}:${pad(mm)}:${pad(ss)} (${(val / 3600000).toFixed(2)} h)`;
+  }
+  if (val < 1000) return `${val} ms`;
+  if (val < 60000) return `${(val / 1000).toFixed(1)} 秒`;
+  if (val < 3600000) {
+    const mins = Math.floor(val / 60000);
+    const secs = Math.round((val % 60000) / 1000);
+    return secs > 0 ? `${mins} 分 ${secs} 秒` : `${mins} 分钟`;
+  }
+  const hrs = Math.floor(val / 3600000);
+  const mins = Math.round((val % 3600000) / 60000);
+  return mins > 0 ? `${hrs} 小时 ${mins} 分` : `${hrs} 小时`;
+}
+
+function formatUpdatedAt(ms: number | null): string {
+  if (!ms || !Number.isFinite(ms)) return '-';
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+interface PresetConfig {
+  id: string;
+  tag: string;
+  label: string;
+  summary: string;
+  values: Record<ConfigFieldKey, number>;
+}
+
+const PRESETS: PresetConfig[] = [
+  {
+    id: 'seedling',
+    tag: '推荐方案',
+    label: '标准育苗方案',
+    summary: '18~28℃ · 适中湿度 · 12h光周期',
+    values: {
+      tMin: 18,
+      tMax: 28,
+      tHys: 1.5,
+      ahMin: 55,
+      ahMax: 80,
+      ahHys: 3,
+      shMin: 40,
+      shMax: 70,
+      luxMin: 300,
+      luxMax: 15000,
+      luxOnMs: 1800000,
+      dayStartMs: 21600000,
+      dayLenMs: 43200000,
+      pumpMs: 5000,
+      pumpIntervalMs: 300000,
+      pumpMaxPerDay: 4,
+      sampleMs: 5000,
+      turnPerDay: 30,
+      turnMax: 180,
+      turnStep: 15,
+      turnIntervalMs: 30000,
+    },
+  },
+  {
+    id: 'fruity',
+    tag: '推荐方案',
+    label: '喜温果蔬方案',
+    summary: '20~32℃ · 强光照 14h · 高频灌溉',
+    values: {
+      tMin: 20,
+      tMax: 32,
+      tHys: 2,
+      ahMin: 45,
+      ahMax: 70,
+      ahHys: 3,
+      shMin: 35,
+      shMax: 65,
+      luxMin: 800,
+      luxMax: 35000,
+      luxOnMs: 3600000,
+      dayStartMs: 19800000,
+      dayLenMs: 50400000,
+      pumpMs: 8000,
+      pumpIntervalMs: 240000,
+      pumpMaxPerDay: 6,
+      sampleMs: 3000,
+      turnPerDay: 45,
+      turnMax: 180,
+      turnStep: 15,
+      turnIntervalMs: 20000,
+    },
+  },
+  {
+    id: 'orchid',
+    tag: '推荐方案',
+    label: '兰花恒湿方案',
+    summary: '18~26℃ · 65~88% 高湿 · 柔和遮阴',
+    values: {
+      tMin: 18,
+      tMax: 26,
+      tHys: 1,
+      ahMin: 65,
+      ahMax: 88,
+      ahHys: 2.5,
+      shMin: 45,
+      shMax: 72,
+      luxMin: 200,
+      luxMax: 10000,
+      luxOnMs: 1200000,
+      dayStartMs: 25200000,
+      dayLenMs: 36000000,
+      pumpMs: 3000,
+      pumpIntervalMs: 600000,
+      pumpMaxPerDay: 3,
+      sampleMs: 5000,
+      turnPerDay: 15,
+      turnMax: 120,
+      turnStep: 15,
+      turnIntervalMs: 45000,
+    },
+  },
+];
+
+const editorPayload = {
+  deviceId,
+  baselineHuman: currentHuman,
+  presets: PRESETS,
+  meta: CONFIG_META,
+};
+---
+
+<section class="config-card" data-config-editor data-device-id={deviceId} aria-label="环境控制参数">
+  <header class="config-header">
+    <div>
+      <span class="config-eyebrow">参数设置</span>
+      <h2 class="config-title">环境控制参数</h2>
+      <p class="config-subtitle">
+        配置温湿度、光照、灌溉与转盘目标范围，修改后将下发至温室控制器。
+        <span class="config-updated">
+          最近更新：<span class="mono" data-config-updated-at>{formatUpdatedAt(config.updated_at_ms)}</span>
+        </span>
+      </p>
+    </div>
+
+    <div class="dirty-summary">
+      <span class="dirty-badge mono" data-dirty-badge>已修改 0 项</span>
+    </div>
+  </header>
+
+  <div class="preset-bar">
+    <div class="preset-head">
+      <span class="preset-label">快速填充预设方案</span>
+      <span class="preset-note">一键填入常用作物种植目标范围</span>
+    </div>
+    <div class="preset-buttons">
+      {
+        PRESETS.map((preset) => (
+          <button
+            type="button"
+            class="preset-btn"
+            data-preset-id={preset.id}
+            data-preset-btn={preset.id}
+            title={preset.summary}
+          >
+            <span class="preset-code">{preset.tag}</span>
+            <strong class="preset-name">{preset.label}</strong>
+            <span class="preset-summary">{preset.summary}</span>
+          </button>
+        ))
+      }
+    </div>
+  </div>
+
+  <div class="config-status-box" data-config-status hidden aria-live="polite">
+    <div class="status-title" data-status-title></div>
+    <p class="status-msg" data-status-msg></p>
+    <ul class="status-errors" data-status-errors hidden></ul>
+  </div>
+
+  <form class="config-form" data-config-form novalidate>
+    <div class="groups-stack">
+      {
+        GROUPS.map((group) => {
+          const fields = CONFIG_META.filter((f) => f.group === group.id);
+          return (
+            <fieldset class="config-group">
+              <legend class="group-legend">
+                <span class="group-code mono">{group.code}</span>
+                <span class="group-title">{group.label}</span>
+                <span class="group-desc">{group.desc}</span>
+              </legend>
+
+              <div class="fields-grid">
+                {fields.map((field) => {
+                  const rawVal = currentHuman[field.key];
+                  const hasVal = hasSavedConfig && typeof rawVal === 'number' && Number.isFinite(rawVal);
+                  const isMs = MS_FIELDS.has(field.key);
+                  const isTurnPerDay = field.key === 'turnPerDay';
+                  return (
+                    <div class="field-card" data-field-card={field.key}>
+                      <div class="field-top">
+                        <label class="field-label" for={`cfg-${deviceId}-${field.key}`}>
+                          <span>{field.label}</span>
+                        </label>
+                        <span class="field-unit mono">{field.unit}</span>
+                      </div>
+
+                      <div class="field-input-row">
+                        <input
+                          id={`cfg-${deviceId}-${field.key}`}
+                          name={field.key}
+                          type="number"
+                          class="field-input mono"
+                          value={hasVal ? rawVal : ''}
+                          placeholder="-"
+                          min={field.min}
+                          max={field.max}
+                          step={field.step}
+                          data-config-input={field.key}
+                          data-scaled={field.scaled ? 'true' : 'false'}
+                        />
+                      </div>
+
+                      {isMs && (
+                        <div class="field-ms-hint mono" data-ms-hint={field.key}>
+                          换算：{hasVal ? formatDurationHelper(field.key, rawVal) : '-'}
+                        </div>
+                      )}
+
+                      {isTurnPerDay && (
+                        <div class="turn-chips" aria-label="180° 因数快捷选择">
+                          {TURN_DIVISORS.map((deg) => (
+                            <button
+                              type="button"
+                              class={`turn-chip mono ${hasVal && rawVal === deg ? 'is-selected' : ''}`}
+                              data-turn-chip={deg}
+                            >
+                              {deg}°
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      <p class="field-desc">{field.description}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </fieldset>
+          );
+        })
+      }
+    </div>
+
+    <div class="payload-preview" hidden>
+      <div class="payload-preview-head">
+        <span class="mono">PATCH /api/devices/{deviceId}/config?unit=human</span>
+      </div>
+      <pre class="payload-code mono" data-patch-preview>{'{}'}</pre>
+    </div>
+
+    <div class="config-actions">
+      <label class="bypass-toggle" hidden>
+        <input type="checkbox" data-skip-local-check />
+        <span>跳过前端预检</span>
+      </label>
+
+      <div class="action-buttons">
+        <button type="button" class="btn-reset" data-config-reset>
+          重置为当前配置
+        </button>
+        <button type="submit" class="btn-submit" data-config-submit data-submit-config>
+          校验并下发配置
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <script type="application/json" data-config-payload set:html={JSON.stringify(editorPayload).replace(/</g, '\\u003c')} />
+</section>
+
+<script>
+  interface ConfigMetaItem {
+    key: string;
+    label: string;
+    unit: string;
+    scaled: boolean;
+    min: number;
+    max: number;
+    step: number;
+  }
+
+  interface PresetItem {
+    id: string;
+    label: string;
+    summary: string;
+    values: Record<string, number>;
+  }
+
+  interface EditorPayload {
+    deviceId: string;
+    baselineHuman: Record<string, number>;
+    presets: PresetItem[];
+    meta: ConfigMetaItem[];
+  }
+
+  const SCALED_KEYS = new Set(['tMin', 'tMax', 'tHys', 'ahMin', 'ahMax', 'ahHys', 'shMin', 'shMax']);
+  const MS_KEYS = new Set([
+    'luxOnMs',
+    'dayStartMs',
+    'dayLenMs',
+    'pumpMs',
+    'pumpIntervalMs',
+    'sampleMs',
+    'turnIntervalMs',
+  ]);
+
+  const RAW_RANGE_RULES: Record<string, [number, number]> = {
+    tMin: [-1000, 5000],
+    tMax: [-1000, 5000],
+    ahMin: [0, 10000],
+    ahMax: [0, 10000],
+    shMin: [0, 10000],
+    shMax: [0, 10000],
+    luxMin: [0, 200000],
+    luxMax: [0, 200000],
+    luxOnMs: [0, 86400000],
+    dayStartMs: [0, 86399999],
+    dayLenMs: [60000, 86400000],
+    pumpMs: [1, 600000],
+    pumpMaxPerDay: [1, 12],
+    sampleMs: [10, 60000],
+    turnMax: [0, 180],
+    turnStep: [1, 180],
+  };
+
+  function notifyToast(message: string, type: 'success' | 'error' | 'info') {
+    const w = window as unknown as {
+      showToast?: (msg: string, variant?: string) => void;
+    };
+    if (typeof w.showToast === 'function') {
+      w.showToast(message, type);
+    }
+  }
+
+  function formatDurationText(key: string, val: number): string {
+    if (!Number.isFinite(val) || val < 0) return '-';
+    if (key === 'dayStartMs') {
+      const totalSec = Math.floor(val / 1000);
+      const hh = Math.floor(totalSec / 3600) % 24;
+      const mm = Math.floor((totalSec % 3600) / 60);
+      const ss = totalSec % 60;
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `当天 ${pad(hh)}:${pad(mm)}:${pad(ss)} (${(val / 3600000).toFixed(2)} h)`;
+    }
+    if (val < 1000) return `${val} ms`;
+    if (val < 60000) return `${(val / 1000).toFixed(1)} 秒`;
+    if (val < 3600000) {
+      const mins = Math.floor(val / 60000);
+      const secs = Math.round((val % 60000) / 1000);
+      return secs > 0 ? `${mins} 分 ${secs} 秒` : `${mins} 分钟`;
+    }
+    const hrs = Math.floor(val / 3600000);
+    const mins = Math.round((val % 3600000) / 60000);
+    return mins > 0 ? `${hrs} 小时 ${mins} 分` : `${hrs} 小时`;
+  }
+
+  function formatNowLabel(ms?: number | null): string {
+    const d = new Date(ms ?? Date.now());
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function validateHumanMerged(
+    patch: Record<string, number>,
+    baselineHuman: Record<string, number>,
+    labelMap: Record<string, string>
+  ): string[] {
+    const errors: string[] = [];
+    const mergedHuman: Record<string, number> = { ...baselineHuman, ...patch };
+    const mergedRaw: Record<string, number> = {};
+    const labelOf = (k: string) => labelMap[k] || k;
+
+    for (const [k, v] of Object.entries(mergedHuman)) {
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        errors.push(`${labelOf(k)} 必须是有效数值`);
+        continue;
+      }
+      if (SCALED_KEYS.has(k)) {
+        mergedRaw[k] = Math.round(v * 100);
+      } else {
+        if (!Number.isInteger(v)) {
+          if (Object.prototype.hasOwnProperty.call(patch, k)) {
+            errors.push(`${labelOf(k)} 必须为整数（当前输入 ${v}）`);
+          }
+          continue;
+        }
+        mergedRaw[k] = v;
+      }
+    }
+
+    for (const key of Object.keys(patch)) {
+      const rawVal = mergedRaw[key];
+      if (typeof rawVal !== 'number' || !Number.isInteger(rawVal)) continue;
+
+      if (key === 'tHys') {
+        if (!(rawVal > 0 && rawVal <= 6000)) {
+          errors.push('控温回滞必须大于 0 ℃ 且不超过 60 ℃');
+        }
+      } else if (key === 'ahHys') {
+        if (!(rawVal > 0 && rawVal <= 10000)) {
+          errors.push('湿度回滞必须大于 0 %RH 且不超过 100 %RH');
+        }
+      } else if (key === 'pumpIntervalMs') {
+        if (rawVal < 1) errors.push('两次浇水最小间隔必须大于等于 1 ms');
+      } else if (key === 'turnPerDay') {
+        if (!(rawVal > 0 && 180 % rawVal === 0)) {
+          errors.push('每日转动角度必须为正整数且是 180° 的因数（如 15/30/45/60/90/180）');
+        }
+      } else if (key === 'turnIntervalMs') {
+        if (rawVal < 1000) errors.push('转盘转动间隔必须大于等于 1000 ms');
+      } else {
+        const range = RAW_RANGE_RULES[key];
+        if (range) {
+          const [minR, maxR] = range;
+          if (rawVal < minR || rawVal > maxR) {
+            if (SCALED_KEYS.has(key)) {
+              errors.push(`${labelOf(key)} 超出允许范围（须在 ${minR / 100} ~ ${maxR / 100} 之间）`);
+            } else {
+              errors.push(`${labelOf(key)} 超出允许范围（须在 ${minR} ~ ${maxR} 之间）`);
+            }
+          }
+        }
+      }
+    }
+
+    const pairs: Array<[string, string, string]> = [
+      ['tMin', 'tMax', '温度下限必须小于温度上限'],
+      ['ahMin', 'ahMax', '空气湿度下限必须小于空气湿度上限'],
+      ['shMin', 'shMax', '土壤湿度下限必须小于土壤湿度上限'],
+      ['luxMin', 'luxMax', '光照下限必须小于光照上限'],
+    ];
+    for (const [minK, maxK, msg] of pairs) {
+      if (
+        Number.isInteger(mergedRaw[minK]) &&
+        Number.isInteger(mergedRaw[maxK]) &&
+        mergedRaw[minK] >= mergedRaw[maxK]
+      ) {
+        errors.push(msg);
+      }
+    }
+
+    if (
+      Number.isInteger(mergedRaw.tHys) &&
+      Number.isInteger(mergedRaw.tMin) &&
+      Number.isInteger(mergedRaw.tMax) &&
+      mergedRaw.tHys >= mergedRaw.tMax - mergedRaw.tMin
+    ) {
+      errors.push('控温回滞必须小于温度上下限差值');
+    }
+
+    if (
+      Number.isInteger(mergedRaw.ahHys) &&
+      Number.isInteger(mergedRaw.ahMin) &&
+      Number.isInteger(mergedRaw.ahMax) &&
+      mergedRaw.ahHys >= mergedRaw.ahMax - mergedRaw.ahMin
+    ) {
+      errors.push('湿度回滞必须小于湿度上下限差值');
+    }
+
+    if (
+      Number.isInteger(mergedRaw.pumpMs) &&
+      Number.isInteger(mergedRaw.pumpIntervalMs) &&
+      mergedRaw.pumpIntervalMs < mergedRaw.pumpMs
+    ) {
+      errors.push('两次浇水最小间隔必须大于等于单次浇水时长');
+    }
+
+    if (
+      Number.isInteger(mergedRaw.turnStep) &&
+      Number.isInteger(mergedRaw.turnMax) &&
+      mergedRaw.turnStep > mergedRaw.turnMax
+    ) {
+      errors.push('转盘单步角度不能超过转盘最大角度');
+    }
+
+    return errors;
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-config-editor]').forEach((root) => {
+    const payloadEl = root.querySelector<HTMLScriptElement>('[data-config-payload]');
+    if (!payloadEl?.textContent) return;
+
+    let payload: EditorPayload;
+    try {
+      payload = JSON.parse(payloadEl.textContent) as EditorPayload;
+    } catch {
+      return;
+    }
+
+    const deviceId = payload.deviceId;
+    let baselineHuman: Record<string, number> = { ...payload.baselineHuman };
+    const labelMap: Record<string, string> = {};
+    (payload.meta ?? []).forEach((m) => {
+      labelMap[m.key] = m.label;
+    });
+
+    const form = root.querySelector<HTMLFormElement>('[data-config-form]');
+    const inputs = Array.from(root.querySelectorAll<HTMLInputElement>('[data-config-input]'));
+    const dirtyBadge = root.querySelector<HTMLElement>('[data-dirty-badge]');
+    const updatedAtEl = root.querySelector<HTMLElement>('[data-config-updated-at]');
+    const statusBox = root.querySelector<HTMLElement>('[data-config-status]');
+    const statusTitle = root.querySelector<HTMLElement>('[data-status-title]');
+    const statusMsg = root.querySelector<HTMLElement>('[data-status-msg]');
+    const statusErrors = root.querySelector<HTMLUListElement>('[data-status-errors]');
+    const submitBtn = root.querySelector<HTMLButtonElement>('[data-config-submit]');
+    const resetBtn = root.querySelector<HTMLButtonElement>('[data-config-reset]');
+    const skipCheckBox = root.querySelector<HTMLInputElement>('[data-skip-local-check]');
+    const presetBtns = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-preset-id]'));
+    const turnChips = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-turn-chip]'));
+    const patchPreviewEl = root.querySelector<HTMLElement>('[data-patch-preview]');
+
+    const showStatus = (
+      variant: 'ok' | 'info' | 'err',
+      title: string,
+      message: string,
+      errors: string[] = []
+    ) => {
+      if (!statusBox || !statusTitle || !statusMsg || !statusErrors) return;
+      statusBox.hidden = false;
+      statusBox.dataset.variant = variant;
+      statusTitle.textContent = title;
+      statusMsg.textContent = message;
+      statusErrors.innerHTML = '';
+      if (errors.length > 0) {
+        statusErrors.hidden = false;
+        errors.forEach((e) => {
+          const li = document.createElement('li');
+          li.textContent = e;
+          statusErrors.appendChild(li);
+        });
+      } else {
+        statusErrors.hidden = true;
+      }
+    };
+
+    const syncMsAndChips = () => {
+      inputs.forEach((input) => {
+        const key = input.dataset.configInput;
+        if (!key) return;
+        const rawText = input.value.trim();
+        const val = Number(rawText);
+        if (MS_KEYS.has(key)) {
+          const hintEl = root.querySelector<HTMLElement>(`[data-ms-hint="${key}"]`);
+          if (hintEl) {
+            if (rawText === '') {
+              hintEl.textContent =
+                baselineHuman[key] === undefined ? '换算：-' : '换算：请输入有效毫秒值';
+            } else {
+              hintEl.textContent = !Number.isFinite(val)
+                ? '换算：请输入有效毫秒值'
+                : `换算：${formatDurationHelper(key, val)}`;
+            }
+          }
+        }
+        if (key === 'turnPerDay') {
+          turnChips.forEach((chip) => {
+            chip.classList.toggle(
+              'is-selected',
+              rawText !== '' && Number(chip.dataset.turnChip) === val
+            );
+          });
+        }
+      });
+    };
+
+    const computePatch = (): { patch: Record<string, number>; invalidFields: string[] } => {
+      const patch: Record<string, number> = {};
+      const invalidFields: string[] = [];
+
+      inputs.forEach((input) => {
+        const key = input.dataset.configInput;
+        if (!key) return;
+        const rawText = input.value.trim();
+        const card = root.querySelector<HTMLElement>(`[data-field-card="${key}"]`);
+
+        if (rawText === '') {
+          if (baselineHuman[key] === undefined) {
+            card?.classList.remove('is-dirty');
+            return;
+          }
+          invalidFields.push(`${labelMap[key] || key} 不能为空且须为合法数值`);
+          card?.classList.add('is-dirty');
+          return;
+        }
+
+        if (!Number.isFinite(Number(rawText))) {
+          invalidFields.push(`${labelMap[key] || key} 须为合法数值`);
+          card?.classList.add('is-dirty');
+          return;
+        }
+
+        const numVal = Number(rawText);
+        const baseVal = baselineHuman[key];
+        const isChanged =
+          baseVal === undefined
+            ? true
+            : SCALED_KEYS.has(key)
+              ? Math.round(numVal * 100) !== Math.round(baseVal * 100)
+              : numVal !== baseVal;
+
+        card?.classList.toggle('is-dirty', isChanged);
+        if (isChanged) {
+          patch[key] = numVal;
+        }
+      });
+
+      return { patch, invalidFields };
+    };
+
+    const refreshDirtyUI = () => {
+      syncMsAndChips();
+      const { patch, invalidFields } = computePatch();
+      const count = Object.keys(patch).length + invalidFields.length;
+      if (dirtyBadge) {
+        dirtyBadge.textContent = `已修改 ${count} 项`;
+        dirtyBadge.classList.toggle('has-changes', count > 0);
+      }
+      if (patchPreviewEl) {
+        patchPreviewEl.textContent =
+          Object.keys(patch).length > 0 ? JSON.stringify(patch, null, 2) : '{}';
+      }
+    };
+
+    inputs.forEach((input) => {
+      input.addEventListener('input', refreshDirtyUI);
+      input.addEventListener('change', refreshDirtyUI);
+    });
+
+    turnChips.forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const deg = chip.dataset.turnChip;
+        const turnInput = root.querySelector<HTMLInputElement>('[data-config-input="turnPerDay"]');
+        if (turnInput && deg) {
+          turnInput.value = deg;
+          refreshDirtyUI();
+        }
+      });
+    });
+
+    presetBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.presetId;
+        const preset = payload.presets.find((p) => p.id === id);
+        if (!preset) return;
+
+        inputs.forEach((input) => {
+          const key = input.dataset.configInput;
+          if (key && Object.prototype.hasOwnProperty.call(preset.values, key)) {
+            input.value = String(preset.values[key]);
+          }
+        });
+        refreshDirtyUI();
+        showStatus(
+          'info',
+          `已填充「${preset.label}」`,
+          `${preset.summary}。请核对各项数值后点击「校验并下发配置」生效。`
+        );
+        notifyToast(`已填充「${preset.label}」`, 'info');
+      });
+    });
+
+    resetBtn?.addEventListener('click', () => {
+      inputs.forEach((input) => {
+        const key = input.dataset.configInput;
+        if (!key) return;
+        input.value =
+          baselineHuman[key] !== undefined && Number.isFinite(baselineHuman[key])
+            ? String(baselineHuman[key])
+            : '';
+      });
+      refreshDirtyUI();
+      if (statusBox) statusBox.hidden = true;
+      notifyToast('已还原为当前保存参数', 'info');
+    });
+
+    form?.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const { patch, invalidFields } = computePatch();
+
+      if (invalidFields.length === 0 && Object.keys(patch).length === 0) {
+        showStatus('info', '未检测到参数变更', '当前填写的参数与设备已保存配置一致，无需重复提交。');
+        return;
+      }
+
+      const skipLocal = Boolean(skipCheckBox?.checked);
+      if (!skipLocal) {
+        const localErrors = [
+          ...invalidFields,
+          ...validateHumanMerged(patch, baselineHuman, labelMap),
+        ];
+        if (localErrors.length > 0) {
+          showStatus('err', '参数校验未通过', '请修正以下参数后再保存：', localErrors);
+          notifyToast('参数校验未通过，请查看提示明细', 'error');
+          return;
+        }
+      }
+
+      const submitPatch: Record<string, unknown> = { ...patch };
+      if (skipLocal && invalidFields.length > 0) {
+        inputs.forEach((input) => {
+          const key = input.dataset.configInput;
+          if (key && input.value.trim() === '' && baselineHuman[key] !== undefined) {
+            submitPatch[key] = '';
+          }
+        });
+      }
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '正在下发...';
+      }
+
+      try {
+        const res = await fetch(
+          `/api/devices/${encodeURIComponent(deviceId)}/config?unit=human`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(submitPatch),
+          }
+        );
+
+        const body = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          message?: string;
+          error?: string;
+          details?: string[];
+          reason?: string;
+          simulatedAck?: boolean;
+          data?: {
+            human?: Record<string, number>;
+            updated_at_ms?: number | null;
+          };
+        } | null;
+
+        if (!res.ok || !body?.ok) {
+          const errList = Array.isArray(body?.details) ? body.details : [];
+          const errTitle = res.status === 422 ? '参数校验未通过' : '参数保存失败';
+          const errMessage =
+            body?.message ||
+            (body?.reason ? `设备拒收原因：${body.reason}` : '请检查参数设置或设备连接状态');
+          showStatus('err', errTitle, errMessage, errList);
+          notifyToast(errMessage, 'error');
+          return;
+        }
+
+        if (body.data?.human) {
+          baselineHuman = { ...baselineHuman, ...body.data.human };
+          inputs.forEach((input) => {
+            const key = input.dataset.configInput;
+            if (!key) return;
+            input.value =
+              baselineHuman[key] !== undefined && Number.isFinite(baselineHuman[key])
+                ? String(baselineHuman[key])
+                : '';
+          });
+        }
+
+        if (updatedAtEl) {
+          updatedAtEl.textContent = formatNowLabel(body.data?.updated_at_ms ?? Date.now());
+        }
+
+        refreshDirtyUI();
+
+        if (body.simulatedAck) {
+          showStatus(
+            'info',
+            '参数已保存，待设备同步',
+            body.message || '参数已通过校验并缓存，待设备在线后自动同步生效。'
+          );
+          notifyToast('参数已保存，待设备同步', 'success');
+        } else {
+          showStatus('ok', '参数设置已生效', body.message || '环境控制参数已成功下发并生效。');
+          notifyToast('参数设置已生效！', 'success');
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '网络请求异常，请检查服务连接';
+        showStatus('err', '参数下发失败', msg);
+        notifyToast(msg, 'error');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '校验并下发配置';
+        }
+      }
+    });
+
+    refreshDirtyUI();
+  });
+</script>
+
+<style>
+  .config-card {
+    background: var(--surface-elevated, #faf8f4);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    border-radius: var(--r-lg, 8px);
+    overflow: hidden;
+  }
+
+  .config-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem 1.25rem;
+    padding: 1.1rem 1.25rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .config-eyebrow {
+    display: block;
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.2rem;
+  }
+
+  .config-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink, #1c201b);
+  }
+
+  .config-subtitle {
+    margin: 0.25rem 0 0;
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+    line-height: 1.5;
+  }
+
+  .config-updated {
+    color: var(--ink, #1c201b);
+  }
+
+  .dirty-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.28rem 0.7rem;
+    border-radius: var(--r-sm, 4px);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    background: var(--bg, #f4f1ea);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--muted, #5a5e56);
+    white-space: nowrap;
+  }
+
+  .dirty-badge.has-changes {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: var(--accent, #23533b);
+    color: var(--accent, #23533b);
+  }
+
+  .preset-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 1rem 1.25rem;
+    background: var(--surface, #e7e0d3);
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .preset-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .preset-label {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  .preset-note {
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .preset-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: 0.65rem;
+  }
+
+  .preset-btn {
+    appearance: none;
+    min-height: 44px;
+    text-align: left;
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+    border-radius: var(--r-md, 6px);
+    padding: 0.65rem 0.9rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    font-family: inherit;
+    transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  }
+
+  .preset-btn:hover {
+    border-color: var(--accent, #23533b);
+    background: var(--bg, #f4f1ea);
+    transform: translateY(-1px);
+  }
+
+  .preset-btn:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: 2px;
+  }
+
+  .preset-code {
+    font-size: 0.8125rem;
+    color: var(--accent, #23533b);
+  }
+
+  .preset-name {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  .preset-summary {
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .config-status-box {
+    margin: 1rem 1.25rem 0;
+    border-radius: var(--r-md, 6px);
+    padding: 0.9rem 1.05rem;
+    font-size: 0.875rem;
+    border: 1px solid transparent;
+  }
+
+  .config-status-box[hidden] {
+    display: none;
+  }
+
+  .config-status-box[data-variant='ok'] {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.35);
+    color: var(--accent, #23533b);
+  }
+
+  .config-status-box[data-variant='info'] {
+    background: var(--bg, #f4f1ea);
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--ink, #1c201b);
+  }
+
+  .config-status-box[data-variant='err'] {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.45);
+    color: var(--danger, #b42318);
+  }
+
+  .status-title {
+    font-weight: 500;
+    font-size: 0.9375rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .status-msg {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .status-errors {
+    margin: 0.5rem 0 0;
+    padding-left: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8125rem;
+  }
+
+  .status-errors[hidden] {
+    display: none;
+  }
+
+  .config-form {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .groups-stack {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .config-group {
+    border: none;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: 0;
+    padding: 1.2rem 1.25rem;
+    margin: 0;
+    background: transparent;
+  }
+
+  .group-legend {
+    padding: 0;
+    margin-bottom: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.55rem;
+    width: 100%;
+  }
+
+  .group-code {
+    font-size: 0.8125rem;
+    color: var(--accent, #23533b);
+    padding: 0.1rem 0.42rem;
+    border: 1px solid rgba(35, 83, 59, 0.3);
+    border-radius: var(--r-sm, 4px);
+    background: rgba(35, 83, 59, 0.08);
+  }
+
+  .group-title {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  .group-desc {
+    font-size: 0.8125rem;
+    font-weight: 400;
+    color: var(--muted, #5a5e56);
+  }
+
+  .fields-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 0.8rem;
+  }
+
+  .field-card {
+    background: var(--bg, #f4f1ea);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: var(--r-md, 6px);
+    padding: 0.85rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+
+  .field-card.is-dirty {
+    border-color: var(--accent, #23533b);
+    border-left-width: 3px;
+    background: var(--surface-elevated, #faf8f4);
+  }
+
+  .field-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+  }
+
+  .field-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .field-unit {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--accent, #23533b);
+    background: rgba(35, 83, 59, 0.08);
+    border: 1px solid rgba(35, 83, 59, 0.25);
+    padding: 0.06rem 0.42rem;
+    border-radius: var(--r-sm, 4px);
+    flex-shrink: 0;
+  }
+
+  .field-input-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .field-input {
+    width: 100%;
+    min-height: 48px;
+    box-sizing: border-box;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    border-radius: var(--r-sm, 4px);
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    background: var(--surface-elevated, #faf8f4);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .field-input::placeholder {
+    color: var(--muted, #5a5e56);
+    opacity: 0.8;
+  }
+
+  .field-input:focus {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: -1px;
+    border-color: var(--accent, #23533b);
+  }
+
+  .field-ms-hint {
+    font-size: 0.8125rem;
+    color: var(--ink, #1c201b);
+    background: var(--surface, #e7e0d3);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    padding: 0.22rem 0.5rem;
+    border-radius: var(--r-sm, 4px);
+  }
+
+  .turn-chips {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.3rem;
+  }
+
+  .turn-chip {
+    appearance: none;
+    min-height: 44px;
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+    color: var(--ink, #1c201b);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.2rem 0.25rem;
+    border-radius: var(--r-sm, 4px);
+    cursor: pointer;
+    text-align: center;
+    transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+  }
+
+  .turn-chip:hover {
+    border-color: var(--accent, #23533b);
+    color: var(--accent, #23533b);
+  }
+
+  .turn-chip:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: 2px;
+  }
+
+  .turn-chip.is-selected {
+    background: var(--accent, #23533b);
+    border-color: var(--accent, #23533b);
+    color: var(--accent-ink, #f4f1ea);
+  }
+
+  .field-desc {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    line-height: 1.45;
+  }
+
+  .payload-preview[hidden],
+  .bypass-toggle[hidden] {
+    display: none;
+  }
+
+  .config-actions {
+    padding: 1.1rem 1.25rem 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.85rem;
+  }
+
+  .action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .btn-reset {
+    appearance: none;
+    min-height: 44px;
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+    color: var(--ink, #1c201b);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    padding: 0.6rem 1.15rem;
+    border-radius: var(--r-md, 6px);
+    cursor: pointer;
+    font-family: inherit;
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+
+  .btn-reset:hover {
+    background: var(--surface, #e7e0d3);
+    border-color: var(--ink, #1c201b);
+  }
+
+  .btn-reset:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: 2px;
+  }
+
+  .btn-submit {
+    appearance: none;
+    min-height: 44px;
+    border: 1px solid var(--accent, #23533b);
+    background: var(--accent, #23533b);
+    color: var(--accent-ink, #f4f1ea);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    padding: 0.62rem 1.4rem;
+    border-radius: var(--r-md, 6px);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+  }
+
+  .btn-submit:hover:not(:disabled) {
+    background: var(--accent-hover, #1b422e);
+    border-color: var(--accent-hover, #1b422e);
+    transform: translateY(-1px);
+  }
+
+  .btn-submit:focus-visible {
+    outline: 2px solid var(--accent, #23533b);
+    outline-offset: 2px;
+  }
+
+  .btn-submit:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .preset-btn,
+    .field-card,
+    .turn-chip,
+    .btn-reset,
+    .btn-submit {
+      transition: none;
+    }
+  }
+</style>

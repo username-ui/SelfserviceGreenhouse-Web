@@ -1,0 +1,705 @@
+---
+import type { AlarmItem } from '../types/greenhouse';
+
+interface Props {
+  deviceId: string;
+  alarms: AlarmItem[];
+}
+
+const { deviceId, alarms } = Astro.props;
+
+const activeAlarms = alarms.filter((a) => a.active);
+const clearedAlarms = alarms.filter((a) => !a.active);
+
+const ALARM_LABELS: Record<string, { title: string; desc: string }> = {
+  water_lack: {
+    title: '水箱缺水告警',
+    desc: '水位传感器检测到缺水，水泵灌溉保护中，请及时补充蓄水箱。',
+  },
+  turntable_failed: {
+    title: '转盘机械故障',
+    desc: '种植转盘运行反馈异常，请排查花盆旋转机构是否卡阻。',
+  },
+};
+
+const CLEAR_REASONS: Record<string, string> = {
+  manual_api: '人工手动解除',
+  manual: '人工手动解除',
+  telemetry_water_normal: '水位恢复自动解除',
+  auto: '系统自动解除',
+};
+
+function getAlarmMeta(code: string) {
+  return (
+    ALARM_LABELS[code] ?? {
+      title: '设备异常告警',
+      desc: '设备端上报异常告警事件，请检查对应执行器或传感器状态。',
+    }
+  );
+}
+
+function formatClearReason(reason: string | null): string {
+  if (!reason) return '已解除';
+  return CLEAR_REASONS[reason] ?? '已解除';
+}
+
+function formatTime(ms: number | null): string {
+  if (!ms || !Number.isFinite(ms)) return '-';
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+---
+
+<section class="alarm-card" data-alarm-panel data-device-id={deviceId} aria-label="告警中心">
+  <header class="alarm-header">
+    <div class="alarm-title-row">
+      <div class={`alarm-icon ${activeAlarms.length > 0 ? 'has-alert' : ''}`} aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square" stroke-linejoin="miter">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
+      </div>
+      <div>
+        <span class="alarm-eyebrow">异常监测</span>
+        <h2 class="alarm-title">
+          告警中心
+          <span
+            class={`alarm-count-badge ${activeAlarms.length > 0 ? 'is-danger' : 'is-safe'}`}
+            data-alarm-active-badge
+          >
+            {activeAlarms.length > 0 ? `${activeAlarms.length} 项激活` : '状态正常'}
+          </span>
+        </h2>
+        <p class="alarm-subtitle">实时监测设备故障事件，支持手动确认解除与历史留痕查看</p>
+      </div>
+    </div>
+
+    <div class="alarm-feedback" data-alarm-feedback hidden aria-live="polite"></div>
+  </header>
+
+  <div class="alarm-split">
+    <div class="alarm-section alarm-section--active">
+      <h3 class="section-heading">
+        <span>当前激活告警</span>
+        <span class="section-count mono" data-active-section-count>{activeAlarms.length}</span>
+      </h3>
+
+      <div class="active-empty" data-active-empty hidden={activeAlarms.length > 0}>
+        <span class="ok-dot" aria-hidden="true" />
+        <div>
+          <strong class="ok-title">状态正常</strong>
+          <p class="ok-sub">当前无异常告警，温室设备运行平稳。</p>
+        </div>
+      </div>
+
+      <div class="alarm-list" data-active-list>
+        {
+          activeAlarms.map((alarm) => {
+            const meta = getAlarmMeta(alarm.code);
+            return (
+              <article class="alarm-item is-active" data-alarm-item data-alarm-code={alarm.code}>
+                <div class="alarm-item-main">
+                  <div class="alarm-item-top">
+                    <span class="alarm-badge-active">激活中</span>
+                    <h4 class="alarm-item-title">{meta.title}</h4>
+                  </div>
+                  <p class="alarm-item-desc">{meta.desc}</p>
+                  <div class="alarm-item-meta mono">
+                    <span>触发：{formatTime(alarm.received_at_ms)}</span>
+                    {alarm.up !== null && alarm.up !== undefined && <span>运行时长：{alarm.up}s</span>}
+                  </div>
+                </div>
+                <div class="alarm-item-actions">
+                  <button
+                    type="button"
+                    class="btn-clear-alarm"
+                    data-clear-alarm={alarm.code}
+                  >
+                    手动解除告警
+                  </button>
+                </div>
+              </article>
+            );
+          })
+        }
+      </div>
+    </div>
+
+    <div class="alarm-section alarm-section--history">
+      <h3 class="section-heading">
+        <span>历史已解除记录</span>
+        <span class="section-count mono" data-cleared-section-count>{clearedAlarms.length}</span>
+      </h3>
+
+      <p class="cleared-empty" data-cleared-empty hidden={clearedAlarms.length > 0}>
+        暂无历史已解除告警记录
+      </p>
+
+      <div class="alarm-ledger" data-cleared-list>
+        {
+          clearedAlarms.map((alarm) => {
+            const meta = getAlarmMeta(alarm.code);
+            return (
+              <article class="alarm-item is-cleared" data-cleared-code={alarm.code}>
+                <div class="alarm-item-main">
+                  <div class="alarm-item-top">
+                    <span class="alarm-badge-cleared">已解除</span>
+                    <h4 class="alarm-item-title">{meta.title}</h4>
+                  </div>
+                  <div class="alarm-item-meta mono">
+                    <span>触发：{formatTime(alarm.received_at_ms)}</span>
+                    <span>解除：{formatTime(alarm.cleared_at_ms ?? alarm.updated_at_ms)}</span>
+                    <span class="clear-reason-tag">{formatClearReason(alarm.clear_reason)}</span>
+                  </div>
+                </div>
+              </article>
+            );
+          })
+        }
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const ALARM_TITLES: Record<string, string> = {
+    water_lack: '水箱缺水告警',
+    turntable_failed: '转盘机械故障',
+  };
+
+  const REASON_LABELS: Record<string, string> = {
+    manual_api: '人工手动解除',
+    manual: '人工手动解除',
+    telemetry_water_normal: '水位恢复自动解除',
+    auto: '系统自动解除',
+  };
+
+  function notifyToast(message: string, type: 'success' | 'error' | 'info') {
+    const w = window as unknown as {
+      showToast?: (msg: string, variant?: string) => void;
+    };
+    if (typeof w.showToast === 'function') {
+      w.showToast(message, type);
+    }
+  }
+
+  function formatDateTime(ms: number | null | undefined): string {
+    if (!ms || !Number.isFinite(ms)) return '-';
+    const d = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function buildClearedCard(alarm: {
+    code: string;
+    received_at_ms?: number | null;
+    cleared_at_ms?: number | null;
+    updated_at_ms?: number | null;
+    clear_reason?: string | null;
+  }): HTMLElement {
+    const article = document.createElement('article');
+    article.className = 'alarm-item is-cleared';
+    article.dataset.clearedCode = alarm.code;
+
+    const main = document.createElement('div');
+    main.className = 'alarm-item-main';
+
+    const top = document.createElement('div');
+    top.className = 'alarm-item-top';
+
+    const badge = document.createElement('span');
+    badge.className = 'alarm-badge-cleared';
+    badge.textContent = '已解除';
+
+    const title = document.createElement('h4');
+    title.className = 'alarm-item-title';
+    title.textContent = ALARM_TITLES[alarm.code] ?? '设备异常告警';
+
+    top.append(badge, title);
+
+    const meta = document.createElement('div');
+    meta.className = 'alarm-item-meta mono';
+
+    const s1 = document.createElement('span');
+    s1.textContent = `触发：${formatDateTime(alarm.received_at_ms)}`;
+
+    const s2 = document.createElement('span');
+    s2.textContent = `解除：${formatDateTime(alarm.cleared_at_ms ?? alarm.updated_at_ms ?? Date.now())}`;
+
+    const s3 = document.createElement('span');
+    s3.className = 'clear-reason-tag';
+    const rKey = alarm.clear_reason || 'manual_api';
+    s3.textContent = REASON_LABELS[rKey] ?? '已解除';
+
+    meta.append(s1, s2, s3);
+    main.append(top, meta);
+    article.appendChild(main);
+    return article;
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-alarm-panel]').forEach((root) => {
+    const deviceId = root.dataset.deviceId;
+    if (!deviceId) return;
+
+    const activeList = root.querySelector<HTMLElement>('[data-active-list]');
+    const clearedList = root.querySelector<HTMLElement>('[data-cleared-list]');
+    const activeEmpty = root.querySelector<HTMLElement>('[data-active-empty]');
+    const clearedEmpty = root.querySelector<HTMLElement>('[data-cleared-empty]');
+    const activeBadge = root.querySelector<HTMLElement>('[data-alarm-active-badge]');
+    const activeSectionCount = root.querySelector<HTMLElement>('[data-active-section-count]');
+    const clearedSectionCount = root.querySelector<HTMLElement>('[data-cleared-section-count]');
+    const iconBox = root.querySelector<HTMLElement>('.alarm-icon');
+    const feedbackEl = root.querySelector<HTMLElement>('[data-alarm-feedback]');
+
+    const showFeedback = (text: string, variant: 'ok' | 'err') => {
+      if (!feedbackEl) return;
+      feedbackEl.hidden = false;
+      feedbackEl.textContent = text;
+      feedbackEl.dataset.state = variant;
+    };
+
+    const syncCounts = () => {
+      const activeCount = activeList ? activeList.querySelectorAll('[data-alarm-item]').length : 0;
+      const clearedCount = clearedList ? clearedList.querySelectorAll('.alarm-item').length : 0;
+
+      if (activeEmpty) activeEmpty.hidden = activeCount > 0;
+      if (clearedEmpty) clearedEmpty.hidden = clearedCount > 0;
+      if (activeSectionCount) activeSectionCount.textContent = String(activeCount);
+      if (clearedSectionCount) clearedSectionCount.textContent = String(clearedCount);
+
+      if (activeBadge) {
+        activeBadge.textContent = activeCount > 0 ? `${activeCount} 项激活` : '状态正常';
+        activeBadge.classList.toggle('is-danger', activeCount > 0);
+        activeBadge.classList.toggle('is-safe', activeCount === 0);
+      }
+      if (iconBox) {
+        iconBox.classList.toggle('has-alert', activeCount > 0);
+      }
+
+      document.querySelectorAll<HTMLElement>('[data-device-active-alarm-count]').forEach((el) => {
+        el.textContent = String(activeCount);
+      });
+    };
+
+    root.addEventListener('click', async (ev) => {
+      const target = ev.target;
+      if (!(target instanceof HTMLElement)) return;
+      const btn = target.closest<HTMLButtonElement>('[data-clear-alarm]');
+      if (!btn) return;
+
+      const code = btn.dataset.clearAlarm;
+      if (!code) return;
+
+      const prevText = btn.textContent || '手动解除告警';
+      btn.disabled = true;
+      btn.textContent = '解除中...';
+
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/alarms`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+
+        const payload = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          message?: string;
+          data?: {
+            code: string;
+            received_at_ms?: number | null;
+            cleared_at_ms?: number | null;
+            updated_at_ms?: number | null;
+            clear_reason?: string | null;
+          };
+        } | null;
+
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.message || '解除告警失败');
+        }
+
+        const itemCard = btn.closest<HTMLElement>('[data-alarm-item]');
+        if (itemCard) {
+          itemCard.remove();
+        }
+
+        if (clearedList) {
+          const existingCleared = clearedList.querySelector(`[data-cleared-code="${CSS.escape(code)}"]`);
+          if (existingCleared) {
+            existingCleared.remove();
+          }
+          const clearedCard = buildClearedCard(payload.data ?? { code, clear_reason: 'manual_api' });
+          clearedList.prepend(clearedCard);
+        }
+
+        syncCounts();
+        const label = ALARM_TITLES[code] ?? '设备告警';
+        const okMsg = `${label}已手动解除`;
+        showFeedback(okMsg, 'ok');
+        notifyToast(okMsg, 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '解除告警失败';
+        showFeedback(msg, 'err');
+        notifyToast(msg, 'error');
+        btn.disabled = false;
+        btn.textContent = prevText;
+      }
+    });
+  });
+</script>
+
+<style>
+  .alarm-card {
+    background: var(--surface-elevated, #faf8f4);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    border-radius: var(--r-lg, 8px);
+    overflow: hidden;
+  }
+
+  .alarm-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    padding: 1.05rem 1.25rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .alarm-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.85rem;
+  }
+
+  .alarm-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--r-md, 6px);
+    border: 1px solid rgba(35, 83, 59, 0.3);
+    background: rgba(35, 83, 59, 0.08);
+    color: var(--accent, #23533b);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .alarm-icon.has-alert {
+    border-color: rgba(180, 35, 24, 0.4);
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    color: var(--danger, #b42318);
+  }
+
+  .alarm-eyebrow {
+    display: block;
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.15rem;
+  }
+
+  .alarm-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink, #1c201b);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .alarm-count-badge {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.16rem 0.55rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid transparent;
+  }
+
+  .alarm-count-badge.is-danger {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.4);
+    color: var(--danger, #b42318);
+  }
+
+  .alarm-count-badge.is-safe {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.32);
+    color: var(--accent, #23533b);
+  }
+
+  .alarm-subtitle {
+    margin: 0.2rem 0 0;
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .alarm-feedback {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.45rem 0.75rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid transparent;
+  }
+
+  .alarm-feedback[data-state='ok'] {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.35);
+    color: var(--accent, #23533b);
+  }
+
+  .alarm-feedback[data-state='err'] {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.4);
+    color: var(--danger, #b42318);
+  }
+
+  .alarm-split {
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  }
+
+  .alarm-section {
+    padding: 1.1rem 1.25rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .alarm-section--active {
+    border-right: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .alarm-section--history {
+    background: var(--bg, #f4f1ea);
+  }
+
+  .section-heading {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding-bottom: 0.55rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .section-count {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.12rem 0.48rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+    color: var(--ink, #1c201b);
+  }
+
+  .active-empty {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem 1.1rem;
+    border-radius: var(--r-md, 6px);
+    background: rgba(35, 83, 59, 0.08);
+    border: 1px solid rgba(35, 83, 59, 0.28);
+    color: var(--accent, #23533b);
+  }
+
+  .ok-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--accent, #23533b);
+    margin-top: 4px;
+    flex-shrink: 0;
+  }
+
+  .ok-title {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--accent, #23533b);
+  }
+
+  .ok-sub {
+    margin: 0.2rem 0 0;
+    font-size: 0.875rem;
+    color: var(--ink, #1c201b);
+    line-height: 1.45;
+  }
+
+  .active-empty[hidden],
+  .cleared-empty[hidden],
+  .alarm-feedback[hidden] {
+    display: none;
+  }
+
+  .cleared-empty {
+    margin: 0;
+    padding: 0.9rem 1rem;
+    border-radius: var(--r-md, 6px);
+    background: var(--surface-elevated, #faf8f4);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    color: var(--muted, #5a5e56);
+    font-size: 0.875rem;
+  }
+
+  .alarm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .alarm-ledger {
+    display: flex;
+    flex-direction: column;
+  }
+
+  :global(.alarm-item) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+  }
+
+  :global(.alarm-item.is-active) {
+    padding: 0.95rem 1.05rem;
+    border-radius: var(--r-md, 6px);
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border: 1px solid rgba(180, 35, 24, 0.45);
+  }
+
+  :global(.alarm-item.is-cleared) {
+    padding: 0.78rem 0;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  :global(.alarm-item.is-cleared:last-child) {
+    border-bottom: none;
+  }
+
+  :global(.alarm-item-main) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    min-width: 210px;
+    flex: 1;
+  }
+
+  :global(.alarm-item-top) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  :global(.alarm-badge-active) {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.14rem 0.5rem;
+    border-radius: var(--r-sm, 4px);
+    background: var(--danger, #b42318);
+    color: #faf8f4;
+  }
+
+  :global(.alarm-badge-cleared) {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.12rem 0.48rem;
+    border-radius: var(--r-sm, 4px);
+    background: rgba(35, 83, 59, 0.08);
+    border: 1px solid rgba(35, 83, 59, 0.32);
+    color: var(--accent, #23533b);
+  }
+
+  :global(.alarm-item-title) {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  :global(.alarm-item-desc) {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--ink, #1c201b);
+    line-height: 1.5;
+  }
+
+  :global(.alarm-item-meta) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.9rem;
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.clear-reason-tag) {
+    background: var(--surface-elevated, #faf8f4);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    padding: 0.06rem 0.45rem;
+    border-radius: var(--r-sm, 4px);
+    color: var(--ink, #1c201b);
+    font-family: var(--font-sans, inherit);
+  }
+
+  .alarm-item-actions {
+    flex-shrink: 0;
+  }
+
+  .btn-clear-alarm {
+    appearance: none;
+    min-height: 44px;
+    border: 1px solid var(--danger, #b42318);
+    background: var(--surface-elevated, #faf8f4);
+    color: var(--danger, #b42318);
+    font-weight: 500;
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+    border-radius: var(--r-md, 6px);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 140ms ease, color 140ms ease;
+  }
+
+  .btn-clear-alarm:hover:not(:disabled) {
+    background: var(--danger, #b42318);
+    color: #faf8f4;
+  }
+
+  .btn-clear-alarm:focus-visible {
+    outline: 2px solid var(--danger, #b42318);
+    outline-offset: 2px;
+  }
+
+  .btn-clear-alarm:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 960px) {
+    .alarm-split {
+      grid-template-columns: 1fr;
+    }
+
+    .alarm-section--active {
+      border-right: none;
+      border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn-clear-alarm {
+      transition: none;
+    }
+  }
+</style>

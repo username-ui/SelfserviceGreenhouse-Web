@@ -1,0 +1,1134 @@
+---
+import AppLayout from '../../layouts/AppLayout.astro';
+import SimulatorBar from '../../components/SimulatorBar.astro';
+import TelemetryChart from '../../components/TelemetryChart.astro';
+import AlarmPanel from '../../components/AlarmPanel.astro';
+import ConfigEditor from '../../components/ConfigEditor.astro';
+import {
+  fetchBackendHealth,
+  fetchDeviceAlarms,
+  fetchDeviceHistory,
+  fetchUserDeviceSnapshot,
+} from '../../lib/backend';
+import { getUserBinding, normalizeDeviceId } from '../../lib/store';
+import type {
+  AlarmItem,
+  TelemetryHistoryResponse,
+  UserDeviceSnapshot,
+} from '../../types/greenhouse';
+
+export const prerender = false;
+
+const user = Astro.locals.user;
+const token = Astro.locals.token || '';
+if (!user) {
+  return Astro.redirect('/login');
+}
+
+const rawDeviceId = Astro.params.deviceId || '';
+const deviceId = normalizeDeviceId(rawDeviceId);
+const displayDeviceId = deviceId || rawDeviceId.trim() || '未指定设备';
+
+const binding = deviceId && token ? await getUserBinding(token, deviceId) : null;
+
+let snapshot: UserDeviceSnapshot | null = null;
+let history: TelemetryHistoryResponse | null = null;
+let alarms: AlarmItem[] = [];
+
+const health = await fetchBackendHealth();
+
+if (!binding) {
+  Astro.response.status = 403;
+} else {
+  const [snapRes, historyRes, alarmsRes] = await Promise.all([
+    fetchUserDeviceSnapshot(token, deviceId),
+    fetchDeviceHistory(deviceId, { limit: 30, order: 'desc' }),
+    fetchDeviceAlarms(deviceId, false),
+  ]);
+  snapshot = snapRes;
+  history = historyRes;
+  alarms = alarmsRes;
+  if (!snapshot) {
+    Astro.response.status = 403;
+  }
+}
+
+function formatUptime(upSeconds: number | null | undefined): string {
+  if (upSeconds === null || upSeconds === undefined || !Number.isFinite(upSeconds) || upSeconds < 0) {
+    return '-';
+  }
+  const secTotal = Math.floor(upSeconds);
+  const days = Math.floor(secTotal / 86400);
+  const hours = Math.floor((secTotal % 86400) / 3600);
+  const mins = Math.floor((secTotal % 3600) / 60);
+  const secs = secTotal % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (days > 0) {
+    return `${days}天 ${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+  }
+  return `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+}
+
+function formatDateTime(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return '-';
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function checkRangeStatus(
+  val: number | undefined,
+  minVal: number | undefined,
+  maxVal: number | undefined
+): { label: string; cls: string } {
+  if (
+    val === undefined ||
+    !Number.isFinite(val) ||
+    minVal === undefined ||
+    !Number.isFinite(minVal) ||
+    maxVal === undefined ||
+    !Number.isFinite(maxVal)
+  ) {
+    return { label: '-', cls: 'range-muted' };
+  }
+  if (val < minVal) return { label: '低于下限', cls: 'range-low' };
+  if (val > maxVal) return { label: '超出上限', cls: 'range-high' };
+  return { label: '处于区间', cls: 'range-ok' };
+}
+
+const isSimulated = Boolean(snapshot?.simulated);
+const hasConfig = Object.keys(snapshot?.config?.raw ?? {}).length > 0;
+const humanCfg = (snapshot?.config?.human ?? {}) as Record<string, number | undefined>;
+
+const tel = snapshot?.latest_telemetry ?? null;
+const upSeconds = snapshot?.status?.up ?? tel?.up ?? null;
+const sourceLabel = isSimulated ? '本地模拟' : tel ? '已连接' : '待接入';
+
+const tempRange = checkRangeStatus(tel?.temperature, hasConfig ? humanCfg.tMin : undefined, hasConfig ? humanCfg.tMax : undefined);
+const ahRange = checkRangeStatus(tel?.air_humidity, hasConfig ? humanCfg.ahMin : undefined, hasConfig ? humanCfg.ahMax : undefined);
+const shRange = checkRangeStatus(tel?.soil_humidity, hasConfig ? humanCfg.shMin : undefined, hasConfig ? humanCfg.shMax : undefined);
+const luxRange = checkRangeStatus(tel?.lux, hasConfig ? humanCfg.luxMin : undefined, hasConfig ? humanCfg.luxMax : undefined);
+
+const pageTitle = binding
+  ? `${binding.name} (${deviceId}) - 设备控制台`
+  : `无法访问该温室设备 - 智农温室云控`;
+---
+
+<AppLayout title={pageTitle} user={user} showNav={true} health={health}>
+  <div class="wrap">
+    {!binding || !snapshot || !history ? (
+      <section class="card forbidden-card" data-testid="device-forbidden-page" role="alert" data-enter>
+        <div class="isolation-grid">
+          <div class="isolation-visual" aria-hidden="true">
+            <svg width="168" height="132" viewBox="0 0 168 132" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="1" y="1" width="166" height="130" rx="6" fill="#f4f1ea" stroke="rgba(28, 32, 27, 0.28)" />
+              <line x1="20" y1="30" x2="148" y2="30" stroke="rgba(28, 32, 27, 0.14)" />
+              <line x1="20" y1="102" x2="148" y2="102" stroke="rgba(28, 32, 27, 0.14)" />
+              <line x1="84" y1="14" x2="84" y2="118" stroke="rgba(28, 32, 27, 0.14)" stroke-dasharray="3 3" />
+              <rect x="64" y="54" width="40" height="32" rx="4" fill="#faf8f4" stroke="#b42318" stroke-width="1.75" />
+              <path d="M72 54V45C72 38.3726 77.3726 33 84 33C90.6274 33 96 38.3726 96 45V54" stroke="#b42318" stroke-width="1.75" />
+              <rect x="82" y="65" width="4" height="10" rx="1" fill="#b42318" />
+              <circle cx="34" cy="20" r="3" fill="#23533b" />
+              <circle cx="134" cy="112" r="3" fill="#b42318" />
+            </svg>
+            <span class="isolation-caption">访问受限</span>
+          </div>
+
+          <div class="isolation-content">
+            <span class="badge badge-danger forbidden-pill">访问受限</span>
+            <h1 class="forbidden-title">无法访问该温室设备</h1>
+            <p class="forbidden-desc">
+              当前账号未绑定设备
+              <code class="forbidden-code">{displayDeviceId}</code>，请确认设备编号是否正确或返回工作台添加。
+            </p>
+
+            <ul class="rows isolation-ledger">
+              <li>
+                <span class="rows__name">当前账号</span>
+                <span class="rows__value">@{user.username}</span>
+              </li>
+              <li>
+                <span class="rows__name">设备编号</span>
+                <span class="rows__value">{displayDeviceId}</span>
+              </li>
+              <li>
+                <span class="rows__name">绑定状态</span>
+                <span class="rows__value">未绑定</span>
+              </li>
+            </ul>
+
+            <div class="forbidden-actions">
+              <a href="/" class="btn btn-primary btn-lg" data-testid="back-to-dashboard-btn">
+                返回工作台
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+    ) : (
+      <div class="console-stack" data-device-console={deviceId}>
+        <nav class="breadcrumb" aria-label="面包屑导航">
+          <a href="/">我的温室</a>
+          <span aria-hidden="true">/</span>
+          <span class="breadcrumb-current">{binding.name} ({deviceId})</span>
+        </nav>
+
+        <section class="card hero-card" data-enter>
+          <div class="hero-top">
+            <div class="hero-identity">
+              <div class="hero-title-row">
+                <h1 class="hero-title" data-device-name-display>{binding.name}</h1>
+                <span class="badge badge-neutral mono">{deviceId}</span>
+                <span class={`badge ${snapshot.online ? 'badge-success' : 'badge-neutral'}`}>
+                  <span
+                    class={`status-dot ${snapshot.online ? 'status-dot-online' : 'status-dot-offline'}`}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {snapshot.online ? '在线' : '离线'}
+                  </span>
+                </span>
+                <span class="badge badge-info">{sourceLabel}</span>
+                <a
+                  href="#alarm-section"
+                  class={`badge ${snapshot.active_alarm_count > 0 ? 'badge-danger' : 'badge-emerald'}`}
+                  title="点击跳转到告警中心"
+                >
+                  活动告警：<span data-device-active-alarm-count>{snapshot.active_alarm_count}</span>
+                </a>
+              </div>
+
+              <div class="hero-tags">
+                <span class="meta-chip">
+                  <strong>区域：</strong>
+                  <span data-device-location-display>{binding.location || '未指定'}</span>
+                </span>
+                <span class="meta-chip">
+                  <strong>作物：</strong>
+                  <span data-device-crop-display>{binding.cropType || '通用作物'}</span>
+                </span>
+                <span class="meta-chip">
+                  <strong>备注：</strong>
+                  <span data-device-notes-display>{binding.notes || '暂无备注'}</span>
+                </span>
+              </div>
+            </div>
+
+            <div class="hero-actions">
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                data-open-edit-device
+              >
+                编辑信息
+              </button>
+              <button
+                type="button"
+                class="btn btn-outline-danger btn-sm"
+                data-open-unbind-device
+              >
+                解绑设备
+              </button>
+            </div>
+          </div>
+
+          <div class="hero-metrics-strip">
+            <div class="hero-kv">
+              <span class="kv-label">运行时长</span>
+              <strong class="kv-value mono">{formatUptime(upSeconds)}</strong>
+            </div>
+            <div class="hero-kv">
+              <span class="kv-label">连接状态</span>
+              <strong class="kv-value">{snapshot.online ? '运行正常' : tel ? '已离线' : '-'}</strong>
+            </div>
+            <div class="hero-kv">
+              <span class="kv-label">最近上报</span>
+              <strong class="kv-value mono">{snapshot.last_seen_at_ms ? formatDateTime(snapshot.last_seen_at_ms) : '-'}</strong>
+            </div>
+            <div class="hero-kv">
+              <span class="kv-label">设备类型</span>
+              <strong class="kv-value">{isSimulated ? '本地模拟测试设备' : '标准温室控制器'}</strong>
+            </div>
+          </div>
+        </section>
+
+        {isSimulated && <SimulatorBar deviceId={deviceId} online={snapshot.online} />}
+
+        <section class="card telemetry-panel" aria-label="实时遥测与执行器面板">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">实时环境遥测与执行器状态</h2>
+              <p class="panel-subtitle">
+                对照当前设定阈值展示实测环境读数及水箱、通风、补光、加热联动状态
+              </p>
+            </div>
+            <span class="badge badge-neutral mono">
+              {tel ? `采集于 ${formatDateTime(tel.received_at_ms)}` : '-'}
+            </span>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card kpi-temp">
+              <div class="kpi-top">
+                <span class="kpi-label">空气温度</span>
+                <span class={`range-tag ${tempRange.cls}`}>{tempRange.label}</span>
+              </div>
+              <div class="kpi-val tabular">
+                {tel ? tel.temperature.toFixed(2) : '-'}
+                <span class="kpi-unit">℃</span>
+              </div>
+              <div class="kpi-foot">
+                {hasConfig && typeof humanCfg.tMin === 'number' && typeof humanCfg.tMax === 'number'
+                  ? `目标区间：${humanCfg.tMin} ~ ${humanCfg.tMax} ℃${typeof humanCfg.tHys === 'number' ? `（回滞 ${humanCfg.tHys} ℃）` : ''}`
+                  : '目标区间：-'}
+              </div>
+            </div>
+
+            <div class="kpi-card kpi-ah">
+              <div class="kpi-top">
+                <span class="kpi-label">空气湿度</span>
+                <span class={`range-tag ${ahRange.cls}`}>{ahRange.label}</span>
+              </div>
+              <div class="kpi-val tabular">
+                {tel ? tel.air_humidity.toFixed(2) : '-'}
+                <span class="kpi-unit">%RH</span>
+              </div>
+              <div class="kpi-foot">
+                {hasConfig && typeof humanCfg.ahMin === 'number' && typeof humanCfg.ahMax === 'number'
+                  ? `目标区间：${humanCfg.ahMin} ~ ${humanCfg.ahMax} %RH${typeof humanCfg.ahHys === 'number' ? `（回滞 ${humanCfg.ahHys} %）` : ''}`
+                  : '目标区间：-'}
+              </div>
+            </div>
+
+            <div class="kpi-card kpi-sh">
+              <div class="kpi-top">
+                <span class="kpi-label">土壤湿度</span>
+                <span class={`range-tag ${shRange.cls}`}>{shRange.label}</span>
+              </div>
+              <div class="kpi-val tabular">
+                {tel ? tel.soil_humidity.toFixed(2) : '-'}
+                <span class="kpi-unit">%RH</span>
+              </div>
+              <div class="kpi-foot">
+                {hasConfig && typeof humanCfg.shMin === 'number' && typeof humanCfg.shMax === 'number'
+                  ? `灌溉区间：${humanCfg.shMin} ~ ${humanCfg.shMax} %RH`
+                  : '目标区间：-'}
+              </div>
+            </div>
+
+            <div class="kpi-card kpi-lux">
+              <div class="kpi-top">
+                <span class="kpi-label">光照强度</span>
+                <span class={`range-tag ${luxRange.cls}`}>{luxRange.label}</span>
+              </div>
+              <div class="kpi-val tabular">
+                {tel ? Math.round(tel.lux) : '-'}
+                <span class="kpi-unit">lx</span>
+              </div>
+              <div class="kpi-foot">
+                {hasConfig && typeof humanCfg.luxMin === 'number' && typeof humanCfg.luxMax === 'number'
+                  ? `目标区间：${humanCfg.luxMin} ~ ${humanCfg.luxMax} lx`
+                  : '目标区间：-'}
+              </div>
+            </div>
+          </div>
+
+          <div class="actuators-row" role="group" aria-label="执行器实时状态">
+            <div class={`actuator-card ${tel ? (tel.water_sufficient ? 'act-ok' : 'act-danger') : 'act-idle'}`}>
+              <div class="act-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z" />
+                </svg>
+              </div>
+              <div>
+                <div class="act-name">水箱水位</div>
+                <div class="act-state">
+                  {tel ? (tel.water_sufficient ? '充足' : '缺水') : '-'}
+                </div>
+              </div>
+            </div>
+
+            <div class={`actuator-card ${tel?.fan_on ? 'act-active' : 'act-idle'}`}>
+              <div class="act-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z" />
+                </svg>
+              </div>
+              <div>
+                <div class="act-name">通风扇</div>
+                <div class="act-state">{tel ? (tel.fan_on ? '运行中' : '待机') : '-'}</div>
+              </div>
+            </div>
+
+            <div class={`actuator-card ${tel?.light_on ? 'act-warm' : 'act-idle'}`}>
+              <div class="act-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+                  <path d="M9 18h6" />
+                  <path d="M10 22h4" />
+                </svg>
+              </div>
+              <div>
+                <div class="act-name">补光灯</div>
+                <div class="act-state">{tel ? (tel.light_on ? '开启' : '关闭') : '-'}</div>
+              </div>
+            </div>
+
+            <div class={`actuator-card ${tel?.heat_on ? 'act-heat' : 'act-idle'}`}>
+              <div class="act-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 12c2-2.96 0-7-1-8 0 3.038-1.773 4.741-3 6-1.226 1.26-2 3.24-2 5a6 6 0 1 0 12 0c0-1.532-1.056-3.94-2-5-1.786 3-2.791 3-4 2z" />
+                </svg>
+              </div>
+              <div>
+                <div class="act-name">加热器</div>
+                <div class="act-state">{tel ? (tel.heat_on ? '运行中' : '待机') : '-'}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <TelemetryChart deviceId={deviceId} history={history} />
+
+        <div id="alarm-section">
+          <AlarmPanel deviceId={deviceId} alarms={alarms} />
+        </div>
+
+        <ConfigEditor deviceId={deviceId} config={snapshot.config} />
+      </div>
+    )}
+  </div>
+
+  {binding && (
+    <Fragment>
+      <div
+        id="edit-device-modal"
+        class="modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-device-title"
+        hidden
+      >
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <div>
+              <h2 id="edit-device-title" class="modal-title">编辑温室设备信息</h2>
+              <p class="modal-subtitle">设备编号 <span class="mono">{deviceId}</span> 绑定元信息更新</p>
+            </div>
+            <button type="button" class="modal-close" data-close-edit-modal aria-label="关闭编辑弹窗">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <form id="edit-device-form">
+            <div class="modal-body">
+              <div class="alert alert-danger" id="edit-device-error" hidden style="margin-bottom: 1rem;"></div>
+
+              <div class="form-group">
+                <label class="form-label" for="edit-device-name">
+                  <span>温室名称 <span class="required-mark">*</span></span>
+                </label>
+                <input
+                  id="edit-device-name"
+                  name="name"
+                  type="text"
+                  class="form-input"
+                  required
+                  value={binding.name}
+                />
+              </div>
+
+              <div class="form-grid-2">
+                <div class="form-group">
+                  <label class="form-label" for="edit-device-location">所属区域</label>
+                  <input
+                    id="edit-device-location"
+                    name="location"
+                    type="text"
+                    class="form-input"
+                    value={binding.location}
+                  />
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="edit-device-crop">种植作物</label>
+                  <input
+                    id="edit-device-crop"
+                    name="cropType"
+                    type="text"
+                    class="form-input"
+                    value={binding.cropType}
+                  />
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="edit-device-notes">备注说明</label>
+                <textarea
+                  id="edit-device-notes"
+                  name="notes"
+                  class="form-textarea"
+                >{binding.notes}</textarea>
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-close-edit-modal>取消</button>
+              <button type="submit" id="edit-device-submit" class="btn btn-primary">保存修改</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div
+        id="detail-unbind-modal"
+        class="modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detail-unbind-title"
+        hidden
+      >
+        <div class="modal-dialog" style="max-width: 440px;">
+          <div class="modal-header">
+            <div>
+              <h2 id="detail-unbind-title" class="modal-title">确认解绑设备</h2>
+              <p class="modal-subtitle">解绑后将立即跳转返回工作台</p>
+            </div>
+            <button type="button" class="modal-close" data-close-unbind-modal aria-label="关闭解绑确认框">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 6 6 18" />
+                <path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p style="margin-bottom: 0.75rem;">
+              确定要解绑 <strong data-unbind-name-display>{binding.name}</strong>（<span class="mono">{deviceId}</span>）吗？
+            </p>
+            <div class="alert alert-warning">
+              <span class="alert-icon" aria-hidden="true">!</span>
+              <span>解绑后该设备将从您的工作台移除。</span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-close-unbind-modal>取消</button>
+            <button type="button" id="detail-unbind-confirm" class="btn btn-danger" data-device-id={deviceId}>
+              确认解绑
+            </button>
+          </div>
+        </div>
+      </div>
+    </Fragment>
+  )}
+</AppLayout>
+
+<script>
+  const consoleRoot = document.querySelector<HTMLElement>('[data-device-console]');
+  if (consoleRoot) {
+    const deviceId = consoleRoot.dataset.deviceConsole || '';
+    const w = window as unknown as {
+      showToast?: (msg: string, variant?: string) => void;
+      showToastNextLoad?: (msg: string, variant?: string) => void;
+    };
+
+    const editModal = document.getElementById('edit-device-modal');
+    const editForm = document.getElementById('edit-device-form') as HTMLFormElement | null;
+    const editError = document.getElementById('edit-device-error');
+    const editSubmit = document.getElementById('edit-device-submit') as HTMLButtonElement | null;
+
+    const unbindModal = document.getElementById('detail-unbind-modal');
+    const unbindConfirm = document.getElementById('detail-unbind-confirm') as HTMLButtonElement | null;
+
+    const openModal = (modal: HTMLElement | null) => {
+      if (!modal) return;
+      modal.hidden = false;
+      modal.classList.add('is-open');
+    };
+
+    const closeModal = (modal: HTMLElement | null) => {
+      if (!modal) return;
+      modal.classList.remove('is-open');
+      modal.hidden = true;
+    };
+
+    document.querySelector('[data-open-edit-device]')?.addEventListener('click', () => {
+      if (editError) editError.hidden = true;
+      openModal(editModal);
+    });
+
+    document.querySelector('[data-open-unbind-device]')?.addEventListener('click', () => {
+      openModal(unbindModal);
+    });
+
+    document.addEventListener('click', (ev) => {
+      const target = ev.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('[data-close-edit-modal]') || target === editModal) {
+        closeModal(editModal);
+      }
+      if (target.closest('[data-close-unbind-modal]') || target === unbindModal) {
+        closeModal(unbindModal);
+      }
+    });
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        closeModal(editModal);
+        closeModal(unbindModal);
+      }
+    });
+
+    editForm?.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      if (!deviceId || !editSubmit) return;
+
+      const formData = new FormData(editForm);
+      const name = String(formData.get('name') ?? '').trim();
+      const location = String(formData.get('location') ?? '').trim();
+      const cropType = String(formData.get('cropType') ?? '').trim();
+      const notes = String(formData.get('notes') ?? '').trim();
+
+      if (!name) {
+        if (editError) {
+          editError.hidden = false;
+          editError.textContent = '温室名称不能为空';
+        }
+        return;
+      }
+
+      editSubmit.disabled = true;
+      editSubmit.textContent = '保存中...';
+
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, location, cropType, notes }),
+        });
+
+        const body = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          message?: string;
+        } | null;
+
+        if (!res.ok || !body?.ok) {
+          throw new Error(body?.message || '保存失败，请稍后重试');
+        }
+
+        const nameEl = document.querySelector('[data-device-name-display]');
+        const locEl = document.querySelector('[data-device-location-display]');
+        const cropEl = document.querySelector('[data-device-crop-display]');
+        const notesEl = document.querySelector('[data-device-notes-display]');
+        const crumbEl = document.querySelector('.breadcrumb-current');
+        const unbindNameEl = document.querySelector('[data-unbind-name-display]');
+
+        if (nameEl) nameEl.textContent = name;
+        if (locEl) locEl.textContent = location || '未指定';
+        if (cropEl) cropEl.textContent = cropType || '通用作物';
+        if (notesEl) notesEl.textContent = notes || '暂无备注';
+        if (crumbEl) crumbEl.textContent = `${name} (${deviceId})`;
+        if (unbindNameEl) unbindNameEl.textContent = name;
+        document.title = `${name} (${deviceId}) - 设备控制台`;
+
+        closeModal(editModal);
+        w.showToast?.('设备信息已更新', 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '更新设备信息失败';
+        if (editError) {
+          editError.hidden = false;
+          editError.textContent = msg;
+        }
+        w.showToast?.(msg, 'error');
+      } finally {
+        editSubmit.disabled = false;
+        editSubmit.textContent = '保存修改';
+      }
+    });
+
+    unbindConfirm?.addEventListener('click', async () => {
+      if (!deviceId || !unbindConfirm) return;
+      unbindConfirm.disabled = true;
+      unbindConfirm.textContent = '解绑中...';
+
+      try {
+        const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+          method: 'DELETE',
+        });
+        const body = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          message?: string;
+        } | null;
+
+        if (!res.ok || !body?.ok) {
+          throw new Error(body?.message || '解绑失败，请稍后重试');
+        }
+
+        w.showToastNextLoad?.(`已成功解绑设备 ${deviceId}`, 'success');
+        window.location.href = '/';
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '解绑设备失败';
+        w.showToast?.(msg, 'error');
+        unbindConfirm.disabled = false;
+        unbindConfirm.textContent = '确认解绑';
+      }
+    });
+  }
+</script>
+
+<style>
+  .forbidden-card {
+    max-width: 920px;
+    margin: 2rem auto;
+    padding: 2rem;
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+  }
+
+  .isolation-grid {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
+  }
+
+  .isolation-visual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1.25rem 1rem;
+    background: var(--surface, #e7e0d3);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-radius: var(--r-md, 6px);
+  }
+
+  .isolation-caption {
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    text-align: center;
+    letter-spacing: 0.04em;
+  }
+
+  .isolation-content {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .forbidden-pill {
+    font-size: 0.8125rem;
+  }
+
+  .forbidden-title {
+    margin: 0;
+    font-size: clamp(1.45rem, 2.2vw, 1.85rem);
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+
+  .forbidden-desc {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--ink, #1c201b);
+    line-height: 1.6;
+  }
+
+  .forbidden-code {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border: 1px solid rgba(180, 35, 24, 0.35);
+    color: var(--danger, #b42318);
+    padding: 0.08rem 0.45rem;
+    border-radius: var(--r-sm, 4px);
+    font-weight: 500;
+    font-size: 0.9375rem;
+  }
+
+  .isolation-ledger {
+    width: 100%;
+    border-top: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .forbidden-note {
+    width: 100%;
+  }
+
+  .forbidden-actions {
+    margin-top: 0.25rem;
+  }
+
+  .console-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1.35rem;
+  }
+
+  .breadcrumb-current {
+    color: var(--ink, #1c201b);
+    font-weight: 500;
+  }
+
+  .hero-card {
+    padding: 0;
+    overflow: hidden;
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .hero-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem 1.25rem;
+    padding: 1.35rem 1.35rem 1.15rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .hero-identity {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    flex: 1;
+    min-width: 260px;
+  }
+
+  .hero-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .hero-title {
+    margin: 0;
+    font-size: clamp(1.5rem, 2.3vw, 2rem);
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    color: var(--ink, #1c201b);
+  }
+
+  .hero-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .meta-chip strong {
+    color: var(--ink, #1c201b);
+    font-weight: 500;
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    flex-shrink: 0;
+  }
+
+  .hero-metrics-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: var(--bg, #f4f1ea);
+  }
+
+  .hero-kv {
+    padding: 0.85rem 1.25rem;
+    border-right: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+  }
+
+  .hero-kv:last-child {
+    border-right: none;
+  }
+
+  .kv-label {
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .kv-value {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  .telemetry-panel {
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    background: var(--surface-elevated, #faf8f4);
+  }
+
+  .panel-head {
+    padding: 1.05rem 1.25rem;
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .panel-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    color: var(--ink, #1c201b);
+  }
+
+  .panel-subtitle {
+    margin: 0.2rem 0 0;
+    font-size: 0.875rem;
+    color: var(--muted, #5a5e56);
+  }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+  }
+
+  .kpi-card {
+    padding: 1.15rem 1.25rem;
+    border-right: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    background: var(--surface-elevated, #faf8f4);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .kpi-card:last-child {
+    border-right: none;
+  }
+
+  .kpi-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+  }
+
+  .kpi-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted, #5a5e56);
+  }
+
+  .range-tag {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.14rem 0.48rem;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+
+  .range-ok {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.3);
+    color: var(--accent, #23533b);
+  }
+  .range-low {
+    background: var(--surface, #e7e0d3);
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--ink, #1c201b);
+  }
+  .range-high {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+    border-color: rgba(180, 35, 24, 0.35);
+    color: var(--danger, #b42318);
+  }
+  .range-muted {
+    background: var(--bg, #f4f1ea);
+    border-color: var(--line, rgba(28, 32, 27, 0.14));
+    color: var(--muted, #5a5e56);
+  }
+
+  .kpi-val {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.75rem, 2.5vw, 2.2rem);
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+  }
+
+  .kpi-unit {
+    font-family: var(--font-sans, inherit);
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--muted, #5a5e56);
+    margin-left: 0.3rem;
+  }
+
+  .kpi-foot {
+    font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+    color: var(--muted, #5a5e56);
+    line-height: 1.45;
+  }
+
+  .actuators-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: var(--bg, #f4f1ea);
+  }
+
+  .actuator-card {
+    padding: 0.9rem 1.25rem;
+    border-right: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .actuator-card:last-child {
+    border-right: none;
+  }
+
+  .act-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--r-sm, 4px);
+    border: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--surface-elevated, #faf8f4);
+    color: var(--muted, #5a5e56);
+  }
+
+  .act-name {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--muted, #5a5e56);
+  }
+
+  .act-state {
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--ink, #1c201b);
+  }
+
+  .act-idle {
+    background: var(--bg, #f4f1ea);
+  }
+  .act-idle .act-state {
+    color: var(--muted, #5a5e56);
+  }
+
+  .act-ok .act-icon {
+    background: rgba(35, 83, 59, 0.08);
+    border-color: rgba(35, 83, 59, 0.35);
+    color: var(--accent, #23533b);
+  }
+  .act-ok .act-state {
+    color: var(--accent, #23533b);
+  }
+
+  .act-danger {
+    background: var(--danger-surface, rgba(180, 35, 24, 0.08));
+  }
+  .act-danger .act-icon {
+    border-color: rgba(180, 35, 24, 0.45);
+    color: var(--danger, #b42318);
+  }
+  .act-danger .act-state {
+    color: var(--danger, #b42318);
+  }
+
+  .act-active .act-icon {
+    background: var(--accent, #23533b);
+    border-color: var(--accent, #23533b);
+    color: var(--accent-ink, #f4f1ea);
+  }
+  .act-active .act-state {
+    color: var(--accent, #23533b);
+  }
+
+  .act-warm .act-icon,
+  .act-heat .act-icon {
+    background: var(--surface, #e7e0d3);
+    border-color: var(--line-strong, rgba(28, 32, 27, 0.28));
+    color: var(--ink, #1c201b);
+  }
+  .act-warm .act-state,
+  .act-heat .act-state {
+    color: var(--ink, #1c201b);
+  }
+
+  @media (max-width: 1024px) {
+    .hero-metrics-strip,
+    .kpi-grid,
+    .actuators-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .hero-kv:nth-child(2n),
+    .kpi-card:nth-child(2n),
+    .actuator-card:nth-child(2n) {
+      border-right: none;
+    }
+
+    .hero-kv:nth-child(-n + 2),
+    .kpi-card:nth-child(-n + 2),
+    .actuator-card:nth-child(-n + 2) {
+      border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    }
+  }
+
+  @media (max-width: 768px) {
+    .isolation-grid {
+      grid-template-columns: 1fr;
+      gap: 1.35rem;
+    }
+
+    .forbidden-card {
+      padding: 1.35rem;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .hero-metrics-strip,
+    .kpi-grid,
+    .actuators-row {
+      grid-template-columns: 1fr;
+    }
+
+    .hero-kv,
+    .kpi-card,
+    .actuator-card {
+      border-right: none;
+      border-bottom: 1px solid var(--line, rgba(28, 32, 27, 0.14));
+    }
+
+    .hero-kv:last-child,
+    .kpi-card:last-child,
+    .actuator-card:last-child {
+      border-bottom: none;
+    }
+  }
+</style>
