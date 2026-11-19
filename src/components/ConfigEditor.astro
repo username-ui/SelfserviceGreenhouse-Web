@@ -598,7 +598,7 @@ const editorPayload = {
             } else {
               hintEl.textContent = !Number.isFinite(val)
                 ? '换算：请输入有效毫秒值'
-                : `换算：${formatDurationHelper(key, val)}`;
+                : `换算：${formatDurationText(key, val)}`;
             }
           }
         }

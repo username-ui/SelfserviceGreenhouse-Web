@@ -8,9 +8,9 @@ if (Astro.locals.user) {
 
 <AppLayout title="登录 - 智农温室云控" showNav={false}>
   <section class="auth-shell">
-    <div class="wrap auth-grid">
-      <div class="auth-brief" data-enter>
-        <div class="auth-brand-row">
+    <div class="wrap">
+      <div class="auth-single" data-enter>
+        <div class="auth-brand-row auth-brand-row--center">
           <span class="brand-mark" aria-hidden="true">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="miter">
               <path d="M4 20C4 11 10 4 20 4c0 10-7 16-16 16Z" />
@@ -19,86 +19,13 @@ if (Astro.locals.user) {
           </span>
           <div>
             <div class="brand-title">智农温室云控</div>
-            <div class="brand-sub">智慧农业温室控制终端</div>
           </div>
         </div>
 
-        <div>
-          <div class="eyebrow">智慧温室监控</div>
-          <h1 class="auth-headline">面向设施农业的智能温室管理平台</h1>
-          <p class="auth-desc">
-            集中掌握名下温室的温度、空气湿度、土壤湿度与光照强度，按作物生长阶段设定环境目标并接收异常预警。
-          </p>
-        </div>
+        <div class="auth-panel">
+          <h1 class="auth-panel-title">登录</h1>
 
-        <div class="topology-frame">
-          <div class="topology-head">
-            <span>温室智能闭环管理流程</span>
-            <span>全天候自动运行</span>
-          </div>
-          <svg
-            viewBox="0 0 640 164"
-            width="100%"
-            role="img"
-            aria-label="智能温室闭环管理流程：01 环境感知 到 02 智能调控 到 03 自动灌溉 到 04 异常预警"
-          >
-            <line x1="142" y1="68" x2="176" y2="68" stroke="#1c201b" stroke-width="1.5" />
-            <polyline points="170,63 176,68 170,73" fill="none" stroke="#1c201b" stroke-width="1.5" />
-
-            <line x1="310" y1="68" x2="344" y2="68" stroke="#1c201b" stroke-width="1.5" />
-            <polyline points="338,63 344,68 338,73" fill="none" stroke="#1c201b" stroke-width="1.5" />
-
-            <line x1="478" y1="68" x2="504" y2="68" stroke="#23533b" stroke-width="1.75" />
-            <polyline points="498,63 504,68 498,73" fill="none" stroke="#23533b" stroke-width="1.75" />
-
-            <rect x="8" y="28" width="134" height="80" rx="4" fill="#f4f1ea" stroke="#1c201b" stroke-width="1.4" />
-            <text x="20" y="52" fill="#5a5e56" font-family="JetBrains Mono, monospace" font-size="11">01 · 感知</text>
-            <text x="20" y="74" fill="#1c201b" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="500">环境感知</text>
-            <text x="20" y="95" fill="#5a5e56" font-family="Noto Sans SC, sans-serif" font-size="11">温湿度 · 光照</text>
-
-            <rect x="176" y="28" width="134" height="80" rx="4" fill="#f4f1ea" stroke="#1c201b" stroke-width="1.4" />
-            <text x="188" y="52" fill="#5a5e56" font-family="JetBrains Mono, monospace" font-size="11">02 · 调控</text>
-            <text x="188" y="74" fill="#1c201b" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="500">智能调控</text>
-            <text x="188" y="95" fill="#5a5e56" font-family="Noto Sans SC, sans-serif" font-size="11">风扇 · 补光 · 加热</text>
-
-            <rect x="344" y="28" width="134" height="80" rx="4" fill="#f4f1ea" stroke="#1c201b" stroke-width="1.4" />
-            <text x="356" y="52" fill="#5a5e56" font-family="JetBrains Mono, monospace" font-size="11">03 · 灌溉</text>
-            <text x="356" y="74" fill="#1c201b" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="500">自动灌溉</text>
-            <text x="356" y="95" fill="#5a5e56" font-family="Noto Sans SC, sans-serif" font-size="11">墒情 · 水位管理</text>
-
-            <rect x="504" y="22" width="128" height="92" rx="4" fill="#e7e0d3" stroke="#23533b" stroke-width="2" stroke-dasharray="4 3" />
-            <text x="516" y="48" fill="#23533b" font-family="JetBrains Mono, monospace" font-size="11" font-weight="500">04 · 保障</text>
-            <text x="516" y="71" fill="#1c201b" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="500">异常预警</text>
-            <text x="516" y="93" fill="#5a5e56" font-family="Noto Sans SC, sans-serif" font-size="11">缺水 · 设备告警</text>
-
-            <line x1="8" y1="136" x2="632" y2="136" stroke="rgba(28,32,27,0.18)" stroke-width="1" />
-            <text x="8" y="153" fill="#5a5e56" font-family="Noto Sans SC, sans-serif" font-size="11">
-              实时环境监测  ·  目标阈值调节  ·  自动化联动启停  ·  及时预警提醒
-            </text>
-          </svg>
-        </div>
-
-        <ul class="rows" aria-label="核心管理能力">
-          <li>
-            <span class="rows__name">环境监测</span>
-            <span class="rows__value">温湿度、土壤墒情与光照持续采集</span>
-          </li>
-          <li>
-            <span class="rows__name">联动控制</span>
-            <span class="rows__value">按设定区间自动调节风扇、补光与加热</span>
-          </li>
-          <li>
-            <span class="rows__name">安全告警</span>
-            <span class="rows__value">水箱缺水与执行异常实时预警通知</span>
-          </li>
-        </ul>
-      </div>
-
-      <div class="auth-panel" data-enter>
-        <h2 class="auth-panel-title">登录工作台</h2>
-        <p class="auth-panel-sub">输入账号凭证进入温室管理工作台</p>
-
-        <div id="login-error" class="alert alert-danger" role="alert" style="display: none; margin-bottom: 16px;">
+          <div id="login-error" class="alert alert-danger" role="alert" style="display: none; margin-bottom: 16px;">
           <svg class="alert-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
@@ -115,7 +42,7 @@ if (Astro.locals.user) {
               name="username"
               type="text"
               class="form-input mono"
-              placeholder="请输入用户名（如 alice）"
+              placeholder="请输入用户名"
               autocomplete="username"
               required
             />
@@ -139,46 +66,12 @@ if (Astro.locals.user) {
           </button>
         </form>
 
-        <div class="demo-section">
-          <div class="demo-section-title">体验账号快速登录</div>
-          <div class="demo-accounts">
-            <div class="demo-row">
-              <div class="demo-row-info">
-                <span class="demo-row-creds">alice · 1号温室（含本地模拟测试）</span>
-                <span class="demo-row-meta">林晓 · 1号温室管理员 · 密码 <span class="mono">password123</span></span>
-              </div>
-              <button
-                type="button"
-                class="btn btn-secondary btn-sm"
-                data-demo-user="alice"
-                data-demo-pass="password123"
-              >
-                一键登录 →
-              </button>
-            </div>
-
-            <div class="demo-row">
-              <div class="demo-row-info">
-                <span class="demo-row-creds">bob · 2号温室</span>
-                <span class="demo-row-meta">陈工 · 2号温室管理员 · 密码 <span class="mono">password123</span></span>
-              </div>
-              <button
-                type="button"
-                class="btn btn-secondary btn-sm"
-                data-demo-user="bob"
-                data-demo-pass="password123"
-              >
-                一键登录 →
-              </button>
-            </div>
+          <div class="auth-footer-link">
+            <span>还没有温室管理账号？</span>
+            <a href="/register" style="font-weight: 500; text-decoration: underline; text-underline-offset: 4px;">
+              注册新账号 →
+            </a>
           </div>
-        </div>
-
-        <div class="auth-footer-link">
-          <span>还没有温室管理账号？</span>
-          <a href="/register" style="font-weight: 500; text-decoration: underline; text-underline-offset: 4px;">
-            注册新账号 →
-          </a>
         </div>
       </div>
     </div>
@@ -192,7 +85,6 @@ if (Astro.locals.user) {
       const submitBtn = document.getElementById('login-submit-btn');
       const errorBox = document.getElementById('login-error');
       const errorText = document.getElementById('login-error-text');
-      const demoBtns = document.querySelectorAll('[data-demo-user]');
 
       if (!form || !usernameInput || !passwordInput || !submitBtn || !errorBox || !errorText) return;
 
@@ -210,11 +102,9 @@ if (Astro.locals.user) {
         if (loading) {
           submitBtn.setAttribute('disabled', 'true');
           submitBtn.textContent = '正在验证登录...';
-          demoBtns.forEach((btn) => btn.setAttribute('disabled', 'true'));
         } else {
           submitBtn.removeAttribute('disabled');
           submitBtn.textContent = '登录工作台';
-          demoBtns.forEach((btn) => btn.removeAttribute('disabled'));
         }
       }
 
@@ -260,16 +150,6 @@ if (Astro.locals.user) {
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         performLogin(usernameInput.value.trim(), passwordInput.value);
-      });
-
-      demoBtns.forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const demoUser = btn.getAttribute('data-demo-user') || '';
-          const demoPass = btn.getAttribute('data-demo-pass') || '';
-          usernameInput.value = demoUser;
-          passwordInput.value = demoPass;
-          performLogin(demoUser, demoPass);
-        });
       });
     })();
   </script>

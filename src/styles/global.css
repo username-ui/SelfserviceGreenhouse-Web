@@ -1040,6 +1040,22 @@ ol {
   gap: var(--s-3);
 }
 
+.auth-single {
+  max-width: 440px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.auth-brand-row--center {
+  justify-content: center;
+}
+
+.auth-single .auth-panel-title {
+  margin-bottom: var(--s-5);
+}
+
 .auth-headline {
   font-size: clamp(28px, 2.5vw, 40px);
   font-weight: 500;
@@ -1095,58 +1111,6 @@ ol {
   margin-bottom: var(--s-5);
 }
 
-.demo-section {
-  margin-top: var(--s-5);
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--line);
-}
-
-.demo-section-title {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--muted);
-  margin-bottom: var(--s-3);
-}
-
-.demo-accounts {
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--bg);
-}
-
-.demo-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3);
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.demo-row:last-child {
-  border-bottom: 0;
-}
-
-.demo-row-info {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.demo-row-creds {
-  font-family: var(--font-sans);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--ink);
-}
-
-.demo-row-meta {
-  font-size: 13px;
-  color: var(--muted);
-}
-
 .auth-footer-link {
   margin-top: var(--s-4);
   padding-top: var(--s-4);
@@ -1165,31 +1129,6 @@ ol {
     grid-template-columns: 1fr;
     gap: var(--s-5);
   }
-}
-
-/* Dashboard Welcome & Summary Grid */
-.welcome-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--s-5);
-  flex-wrap: wrap;
-  padding-bottom: var(--s-5);
-  border-bottom: 1px solid var(--line);
-  margin-bottom: var(--s-5);
-}
-
-.welcome-title {
-  font-size: clamp(28px, 2.2vw, 36px);
-  font-weight: 500;
-  letter-spacing: -0.035em;
-  margin-bottom: 6px;
-}
-
-.welcome-subtitle {
-  font-size: 16px;
-  color: var(--muted);
-  margin: 0;
 }
 
 /* 1px Hairline Summary Ledger Grid */
@@ -1263,7 +1202,7 @@ ol {
 /* Section Heading */
 .section-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
   flex-wrap: wrap;
@@ -1582,7 +1521,7 @@ ol {
     grid-template-columns: 1fr;
   }
 
-  .welcome-header .btn {
+  .section-header .btn {
     width: 100%;
   }
 

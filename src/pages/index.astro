@@ -47,25 +47,6 @@ const avgHumidity =
 
 <AppLayout title="工作台 - 智农温室云控" user={user} showNav={true} health={health}>
   <div class="wrap">
-    <section class="welcome-header" data-enter>
-      <div>
-        <div class="eyebrow">智能温室工作台</div>
-        <h1 class="welcome-title">你好，{user.displayName}</h1>
-        <p class="welcome-subtitle">
-          实时监测温室环境数据、设备在线状态与告警信息
-        </p>
-      </div>
-
-      <button
-        type="button"
-        class="btn btn-primary btn-lg"
-        data-open-add-device
-        data-testid="open-add-device-btn"
-      >
-        + 添加设备
-      </button>
-    </section>
-
     <section class="summary-strip" aria-label="核心概览统计" data-enter>
       <div class="summary-cell">
         <span class="summary-label">我的设备总数</span>
@@ -119,6 +100,14 @@ const avgHumidity =
           我的温室设备
           <span class="badge badge-neutral mono">{totalDevices}</span>
         </h2>
+        <button
+          type="button"
+          class="btn btn-primary btn-lg"
+          data-open-add-device
+          data-testid="open-add-device-btn"
+        >
+          + 添加设备
+        </button>
       </div>
 
       {snapshots.length === 0 ? (
