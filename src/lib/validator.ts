@@ -197,12 +197,12 @@ export const CONFIG_META: readonly ConfigFieldMeta[] = [
     label: '昼夜窗口起点',
     group: 'light',
     groupLabel: '光照与昼夜窗口',
-    unit: 'ms',
+    unit: 'HH:mm',
     scaled: false,
     min: 0,
     max: 86399999,
     step: 60000,
-    description: '当天 0 点起算的光周期开始时刻（< 24 小时）',
+    description: '每日光周期开始时刻（24 小时制，如 06:00）',
   },
   {
     key: 'dayLenMs',
@@ -497,6 +497,45 @@ function validateCrossFieldRules(merged: Record<string, unknown>): string[] {
   }
 
   return errors;
+}
+
+/**
+ * Formats a millisecond-of-day offset (`0..86399999`) as a 24-hour `HH:mm` time string.
+ */
+export function msToTimeString(ms: number): string {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0 || ms >= 86_400_000) {
+    return '';
+  }
+  const totalMinutes = Math.floor(ms / 60_000);
+  const hh = Math.floor(totalMinutes / 60) % 24;
+  const mm = totalMinutes % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+/**
+ * Parses a 24-hour `HH:mm` (or `HH:mm:ss`) string into milliseconds since `00:00`.
+ * Returns `null` when the format or range is invalid.
+ */
+export function timeStringToMs(raw: string): number | null {
+  const trimmed = String(raw ?? '').trim();
+  const match = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(trimmed);
+  if (!match) return null;
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  const ss = match[3] ? Number(match[3]) : 0;
+  return ((hh * 60 + mm) * 60 + ss) * 1000;
+}
+
+/**
+ * Formats a human-unit config field value for its corresponding form `<input>` value.
+ */
+export function formatConfigInputValue(
+  key: ConfigFieldKey | string,
+  val: number | undefined
+): string {
+  if (val === undefined || !Number.isFinite(val)) return '';
+  if (key === 'dayStartMs') return msToTimeString(val);
+  return String(val);
 }
 
 /**

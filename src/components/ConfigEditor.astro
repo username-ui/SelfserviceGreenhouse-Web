@@ -1,6 +1,6 @@
 ---
 import type { ConfigFieldKey, ConfigGroupId, DeviceConfig } from '../types/greenhouse';
-import { CONFIG_META } from '../lib/validator';
+import { CONFIG_META, formatConfigInputValue } from '../lib/validator';
 
 interface Props {
   deviceId: string;
@@ -23,7 +23,6 @@ const GROUPS: Array<{ id: ConfigGroupId; code: string; label: string; desc: stri
 
 const MS_FIELDS = new Set<ConfigFieldKey>([
   'luxOnMs',
-  'dayStartMs',
   'dayLenMs',
   'pumpMs',
   'pumpIntervalMs',
@@ -33,16 +32,8 @@ const MS_FIELDS = new Set<ConfigFieldKey>([
 
 const TURN_DIVISORS = [15, 30, 45, 60, 90, 180];
 
-function formatDurationHelper(key: ConfigFieldKey, val: number): string {
+function formatDurationHelper(_key: ConfigFieldKey, val: number): string {
   if (!Number.isFinite(val) || val < 0) return '-';
-  if (key === 'dayStartMs') {
-    const totalSec = Math.floor(val / 1000);
-    const hh = Math.floor(totalSec / 3600) % 24;
-    const mm = Math.floor((totalSec % 3600) / 60);
-    const ss = totalSec % 60;
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `当天 ${pad(hh)}:${pad(mm)}:${pad(ss)} (${(val / 3600000).toFixed(2)} h)`;
-  }
   if (val < 1000) return `${val} ms`;
   if (val < 60000) return `${(val / 1000).toFixed(1)} 秒`;
   if (val < 3600000) {
@@ -234,7 +225,9 @@ const editorPayload = {
                   const rawVal = currentHuman[field.key];
                   const hasVal = hasSavedConfig && typeof rawVal === 'number' && Number.isFinite(rawVal);
                   const isMs = MS_FIELDS.has(field.key);
+                  const isTimeField = field.key === 'dayStartMs';
                   const isTurnPerDay = field.key === 'turnPerDay';
+                  const inputValue = hasVal ? formatConfigInputValue(field.key, rawVal) : '';
                   return (
                     <div class="field-card" data-field-card={field.key}>
                       <div class="field-top">
@@ -248,13 +241,13 @@ const editorPayload = {
                         <input
                           id={`cfg-${deviceId}-${field.key}`}
                           name={field.key}
-                          type="number"
+                          type={isTimeField ? 'time' : 'number'}
                           class="field-input mono"
-                          value={hasVal ? rawVal : ''}
-                          placeholder="-"
-                          min={field.min}
-                          max={field.max}
-                          step={field.step}
+                          value={inputValue}
+                          placeholder={isTimeField ? undefined : '-'}
+                          min={isTimeField ? '00:00' : field.min}
+                          max={isTimeField ? '23:59' : field.max}
+                          step={isTimeField ? 60 : field.step}
                           data-config-input={field.key}
                           data-scaled={field.scaled ? 'true' : 'false'}
                         />
@@ -319,6 +312,8 @@ const editorPayload = {
 </section>
 
 <script>
+  import { formatConfigInputValue, msToTimeString, timeStringToMs } from '../lib/validator';
+
   interface ConfigMetaItem {
     key: string;
     label: string;
@@ -346,7 +341,6 @@ const editorPayload = {
   const SCALED_KEYS = new Set(['tMin', 'tMax', 'tHys', 'ahMin', 'ahMax', 'ahHys', 'shMin', 'shMax']);
   const MS_KEYS = new Set([
     'luxOnMs',
-    'dayStartMs',
     'dayLenMs',
     'pumpMs',
     'pumpIntervalMs',
@@ -382,16 +376,8 @@ const editorPayload = {
     }
   }
 
-  function formatDurationText(key: string, val: number): string {
+  function formatDurationText(_key: string, val: number): string {
     if (!Number.isFinite(val) || val < 0) return '-';
-    if (key === 'dayStartMs') {
-      const totalSec = Math.floor(val / 1000);
-      const hh = Math.floor(totalSec / 3600) % 24;
-      const mm = Math.floor((totalSec % 3600) / 60);
-      const ss = totalSec % 60;
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `当天 ${pad(hh)}:${pad(mm)}:${pad(ss)} (${(val / 3600000).toFixed(2)} h)`;
-    }
     if (val < 1000) return `${val} ms`;
     if (val < 60000) return `${(val / 1000).toFixed(1)} 秒`;
     if (val < 3600000) {
@@ -628,8 +614,33 @@ const editorPayload = {
             card?.classList.remove('is-dirty');
             return;
           }
-          invalidFields.push(`${labelMap[key] || key} 不能为空且须为合法数值`);
+          invalidFields.push(
+            key === 'dayStartMs'
+              ? `${labelMap[key] || key} 不能为空且须为合法时间`
+              : `${labelMap[key] || key} 不能为空且须为合法数值`
+          );
           card?.classList.add('is-dirty');
+          return;
+        }
+
+        const baseVal = baselineHuman[key];
+
+        if (key === 'dayStartMs') {
+          const parsedMs = timeStringToMs(rawText);
+          if (parsedMs === null) {
+            invalidFields.push(`${labelMap[key] || key} 须为合法时间（HH:mm）`);
+            card?.classList.add('is-dirty');
+            return;
+          }
+          const baseTime = baseVal !== undefined ? msToTimeString(baseVal) : '';
+          const isChanged =
+            baseVal === undefined
+              ? true
+              : rawText.slice(0, 5) !== baseTime && parsedMs !== baseVal;
+          card?.classList.toggle('is-dirty', isChanged);
+          if (isChanged) {
+            patch[key] = parsedMs;
+          }
           return;
         }
 
@@ -640,7 +651,6 @@ const editorPayload = {
         }
 
         const numVal = Number(rawText);
-        const baseVal = baselineHuman[key];
         const isChanged =
           baseVal === undefined
             ? true
@@ -696,7 +706,7 @@ const editorPayload = {
         inputs.forEach((input) => {
           const key = input.dataset.configInput;
           if (key && Object.prototype.hasOwnProperty.call(preset.values, key)) {
-            input.value = String(preset.values[key]);
+            input.value = formatConfigInputValue(key, preset.values[key]);
           }
         });
         refreshDirtyUI();
@@ -713,10 +723,7 @@ const editorPayload = {
       inputs.forEach((input) => {
         const key = input.dataset.configInput;
         if (!key) return;
-        input.value =
-          baselineHuman[key] !== undefined && Number.isFinite(baselineHuman[key])
-            ? String(baselineHuman[key])
-            : '';
+        input.value = formatConfigInputValue(key, baselineHuman[key]);
       });
       refreshDirtyUI();
       if (statusBox) statusBox.hidden = true;
@@ -799,10 +806,7 @@ const editorPayload = {
           inputs.forEach((input) => {
             const key = input.dataset.configInput;
             if (!key) return;
-            input.value =
-              baselineHuman[key] !== undefined && Number.isFinite(baselineHuman[key])
-                ? String(baselineHuman[key])
-                : '';
+            input.value = formatConfigInputValue(key, baselineHuman[key]);
           });
         }
 
@@ -1166,6 +1170,11 @@ const editorPayload = {
     outline: 2px solid var(--accent, #23533b);
     outline-offset: -1px;
     border-color: var(--accent, #23533b);
+  }
+
+  input[type='time'].field-input::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.72;
   }
 
   .field-ms-hint {
